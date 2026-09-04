@@ -1,15 +1,15 @@
 use axum::{
-    extract::Json,
+    extract::State,
     http::StatusCode,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use tokio::sync::Mutex;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Project {
@@ -17,7 +17,7 @@ pub struct Project {
     pub language: String,
     pub path: String,
     pub containerized: bool,
-    pub container_runtime: String, // "podman" or "docker"
+    pub container_runtime: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,6 +25,7 @@ pub struct ProjectsStore {
     pub projects: Vec<Project>,
 }
 
+#[derive(Clone)]
 pub struct AppState {
     projects: Arc<Mutex<ProjectsStore>>,
 }
@@ -44,7 +45,7 @@ pub struct ApiResponse<T> {
     pub error: Option<String>,
 }
 
-async fn list_projects(state: axum::extract::State<AppState>) -> Json<ApiResponse<Vec<Project>>> {
+async fn list_projects(State(state): State<AppState>) -> Json<ApiResponse<Vec<Project>>> {
     let projects = state.projects.lock().await;
     Json(ApiResponse {
         success: true,
@@ -54,13 +55,12 @@ async fn list_projects(state: axum::extract::State<AppState>) -> Json<ApiRespons
 }
 
 async fn create_project(
-    state: axum::extract::State<AppState>,
+    State(state): State<AppState>,
     Json(req): Json<CreateProjectRequest>,
 ) -> (StatusCode, Json<ApiResponse<Project>>) {
     let project_path = format!("/mnt/NOBILITY_VAULT/projects/{}", req.name);
     let containerized = req.containerized.unwrap_or(false);
     let container_runtime = req.container_runtime.unwrap_or_else(|| {
-        // Check for podman first (safer), fallback to docker
         if Command::new("podman").arg("--version").status().is_ok() {
             "podman".to_string()
         } else if Command::new("docker").arg("--version").status().is_ok() {
@@ -70,7 +70,6 @@ async fn create_project(
         }
     });
 
-    // Create project directory
     if let Err(e) = fs::create_dir_all(&project_path) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -82,7 +81,6 @@ async fn create_project(
         );
     }
 
-    // Initialize Rust project
     let status = Command::new("cargo")
         .arg("init")
         .arg("--name")
@@ -101,7 +99,6 @@ async fn create_project(
         );
     }
 
-    // Initialize git
     let _ = Command::new("git")
         .arg("init")
         .current_dir(&project_path)
@@ -119,33 +116,19 @@ async fn create_project(
         .current_dir(&project_path)
         .status();
 
-    // Create UV venv if containerized
     if containerized && container_runtime != "none" {
-        let mut cmd = if container_runtime == "podman" {
-            let mut c = Command::new("podman");
-            c.arg("run")
-                .arg("--rm")
-                .arg("-v")
-                .arg(format!("{}:/workspace", project_path))
-                .arg("python:3.11-slim");
-            c
-        } else {
-            let mut c = Command::new("docker");
-            c.arg("run")
-                .arg("--rm")
-                .arg("-v")
-                .arg(format!("{}:/workspace", project_path))
-                .arg("python:3.11-slim");
-            c
-        };
-
-        cmd.arg("bash")
+        let runtime_cmd = if container_runtime == "podman" { "podman" } else { "docker" };
+        let mut cmd = Command::new(runtime_cmd);
+        cmd.arg("run")
+            .arg("--rm")
+            .arg("-v")
+            .arg(format!("{}:/workspace", project_path))
+            .arg("python:3.11-slim")
+            .arg("bash")
             .arg("-c")
             .arg("cd /workspace && pip install uv && uv venv .venv && uv sync");
-
         let _ = cmd.status();
     } else {
-        // Local venv with UV
         let _ = Command::new("uv")
             .arg("venv")
             .arg(".venv")
@@ -157,7 +140,6 @@ async fn create_project(
             .status();
     }
 
-    // Add initial commit
     let _ = Command::new("git")
         .arg("add")
         .arg("-A")
@@ -178,7 +160,6 @@ async fn create_project(
         container_runtime,
     };
 
-    // Add to projects list
     let mut projects = state.projects.lock().await;
     projects.projects.push(project.clone());
 
@@ -196,6 +177,7 @@ async fn health() -> Json<ApiResponse<String>> {
     let podman_ok = Command::new("podman").arg("--version").status().is_ok();
     let docker_ok = Command::new("docker").arg("--version").status().is_ok();
     let uv_ok = Command::new("uv").arg("--version").status().is_ok();
+    let cargo_ok = Command::new("cargo").arg("--version").status().is_ok();
 
     let runtime = if podman_ok {
         "podman (primary)"
@@ -208,9 +190,10 @@ async fn health() -> Json<ApiResponse<String>> {
     Json(ApiResponse {
         success: true,
         data: Some(format!(
-            "Container runtime: {}, UV: {}",
+            "Runtime: {}, UV: {}, Cargo: {}",
             runtime,
-            if uv_ok { "ok" } else { "missing" }
+            if uv_ok { "ok" } else { "missing" },
+            if cargo_ok { "ok" } else { "missing" }
         )),
         error: None,
     })
@@ -218,8 +201,6 @@ async fn health() -> Json<ApiResponse<String>> {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
-
     let state = AppState {
         projects: Arc::new(Mutex::new(ProjectsStore {
             projects: vec![],
@@ -237,9 +218,10 @@ async fn main() {
         .await
         .expect("Failed to bind to 127.0.0.1:8002");
 
-    println!("🏗️  Qwen Kiro Backend listening on http://127.0.0.1:8002");
-    println!("   Container runtime: podman (preferred) or docker (fallback)");
-    println!("   Projects: /mnt/NOBILITY_VAULT/projects/");
+    println!("🏗️  Crane Backend listening on http://127.0.0.1:8002");
+    println!("   GET  /api/health");
+    println!("   GET  /api/projects");
+    println!("   POST /api/projects/create");
 
     axum::serve(listener, app).await.unwrap();
 }

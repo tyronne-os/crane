@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/mnt/NOBILITY_VAULT/qwen-kiro-ide/target/release/build/mime_guess-10e692d334ca6eb3/out/mime_types_generated.rs
