@@ -31,52 +31,128 @@ function MirandaVoicePanel({ isOpen, onToggle }) {
     return () => clearInterval(animRef.current);
   }, [status]);
 
-  const startListening = async () => {
-    // Phase 2: will stream to Parakeet ASR via /api/miranda/transcribe.
-    // For now: use browser SpeechRecognition as a local bridge so you can
-    // talk to Miranda immediately while the llama.cpp ASR server is set up.
+  // Convert Blob to base64 string
+  const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+  // Play base64-encoded MP3 audio
+  const playAudioB64 = (b64) => {
+    const audio = new Audio(`data:audio/mp3;base64,${b64}`);
+    audio.onended = () => setStatus('idle');
+    audio.onerror = () => setStatus('idle');
+    audio.play().catch(() => setStatus('idle'));
+    return audio;
+  };
+
+  // Browser SpeechSynthesis fallback
+  const speakWithBrowser = (text) => {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 0.95;
+    utter.pitch = 0.88;
+    const voices = speechSynthesis.getVoices();
+    const female = voices.find(v => /female|woman|girl|zira|samantha|victoria|karen/i.test(v.name));
+    if (female) utter.voice = female;
+    utter.onend = () => setStatus('idle');
+    speechSynthesis.speak(utter);
+  };
+
+  // Browser SpeechRecognition fallback
+  const startBrowserSR = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setTranscript('Browser speech not available. Set up Parakeet server on port 8004.');
+      setTranscript('No speech input available. Type your message.');
+      setStatus('idle');
       return;
     }
-
-    setStatus('listening');
-    setTranscript('');
-    setResponse('');
-
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-US';
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-
     recognition.onresult = (e) => {
       const text = Array.from(e.results).map(r => r[0].transcript).join('');
       setTranscript(text);
       transcriptRef.current = text;
     };
-
     recognition.onend = async () => {
       const finalText = transcriptRef.current;
       transcriptRef.current = '';
-      if (finalText.trim()) {
-        await sendToMiranda(finalText);
+      if (finalText.trim()) await sendToMiranda(finalText);
+      else setStatus('idle');
+    };
+    recognition.onerror = () => setStatus('idle');
+    recognition.start();
+    mediaRef.current = { type: 'browser-sr', recognition };
+  };
+
+  const startListening = async () => {
+    setStatus('listening');
+    setTranscript('');
+    setResponse('');
+    transcriptRef.current = '';
+
+    // Try MediaRecorder (real audio for Parakeet ASR)
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (_) {
+      // Mic access denied — fall back to browser SR
+      startBrowserSR();
+      return;
+    }
+
+    const chunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+    const recorder = new MediaRecorder(stream, { mimeType });
+
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      setStatus('thinking');
+
+      const blob = new Blob(chunks, { type: mimeType });
+      let transcript = null;
+
+      // Try Parakeet ASR on backend
+      try {
+        const b64 = await blobToBase64(blob);
+        const res = await fetch(`${API}/api/miranda/transcribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audio_b64: b64 }),
+        });
+        const data = await res.json();
+        if (data.success && data.data?.transcript?.trim()) {
+          transcript = data.data.transcript;
+          setTranscript(transcript);
+        }
+      } catch (_) {}
+
+      if (transcript) {
+        await sendToMiranda(transcript);
+      } else {
+        // Parakeet not up yet — fall back to browser SR
+        setStatus('listening');
+        startBrowserSR();
       }
     };
 
-    recognition.onerror = (e) => {
-      setStatus('idle');
-      setTranscript(`Recognition error: ${e.error}`);
-    };
-
-    mediaRef.current = null;
-    recognition.start();
-    mediaRef.current = recognition;
+    recorder.start();
+    mediaRef.current = { type: 'media', recorder, stream };
   };
 
   const stopListening = () => {
-    if (mediaRef.current && mediaRef.current.stop) {
-      mediaRef.current.stop();
+    if (!mediaRef.current) return;
+    if (mediaRef.current.type === 'media') {
+      mediaRef.current.recorder.stop();
+    } else if (mediaRef.current.type === 'browser-sr') {
+      mediaRef.current.recognition.stop();
     }
     setStatus('thinking');
   };
@@ -92,18 +168,27 @@ function MirandaVoicePanel({ isOpen, onToggle }) {
       });
       const data = await res.json();
       if (data.success) {
-        setResponse(data.data.response);
+        const responseText = data.data.response;
+        setResponse(responseText);
         setStatus('speaking');
-        // Browser TTS as bridge until VibeVoice server is wired (Phase 2)
-        const utter = new SpeechSynthesisUtterance(data.data.response);
-        utter.rate = 0.95;
-        utter.pitch = 0.88;
-        // Pick first female voice available
-        const voices = speechSynthesis.getVoices();
-        const female = voices.find(v => /female|woman|girl|zira|samantha|victoria|karen/i.test(v.name));
-        if (female) utter.voice = female;
-        utter.onend = () => setStatus('idle');
-        speechSynthesis.speak(utter);
+
+        // Try backend TTS (VibeVoice/Kokoro) first
+        let ttsHandled = false;
+        try {
+          const ttsRes = await fetch(`${API}/api/miranda/speak`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: responseText }),
+          });
+          const ttsData = await ttsRes.json();
+          if (ttsData.success && ttsData.data?.audio_b64) {
+            playAudioB64(ttsData.data.audio_b64);
+            ttsHandled = true;
+          }
+        } catch (_) {}
+
+        // Fall back to browser SpeechSynthesis
+        if (!ttsHandled) speakWithBrowser(responseText);
       } else {
         setResponse(data.error || 'Miranda is offline. Check localhost:8003.');
         setStatus('idle');

@@ -4,11 +4,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine as _;
 use miranda_nodes::conversation::{
     mood_stream::{MoodStreamProcessor, MoodVector},
     persona_injection::{detect_role, Role},
     prompt_builder::{build_prompt, RetrievedContext, DEFAULT_TOKEN_BUDGET},
-    state_machine::{detect_cue, StateMachine, State as ConvState},
+    state_machine::{detect_cue, StateMachine},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -470,15 +471,65 @@ async fn qwen_generate(
 // ===== Miranda Voice Routes (Phase 2 stubs — return 503 until servers are running) =====
 
 async fn miranda_transcribe(
-    Json(_req): Json<MirandaTranscribeRequest>,
+    Json(req): Json<MirandaTranscribeRequest>,
 ) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
-    // Parakeet 110M ASR server wiring arrives in Phase 2.
-    // Returns 503 so the frontend can surface a clear "ASR not ready" message.
-    (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
-        success: false,
-        data: None,
-        error: Some("Parakeet ASR server not yet running on localhost:8004. Start with: llama-server -m <parakeet.gguf> --port 8004".to_string()),
-    }))
+    // Decode base64 audio sent from the browser MediaRecorder
+    let audio_bytes = match base64::engine::general_purpose::STANDARD.decode(req.audio_b64.trim()) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            success: false, data: None,
+            error: Some(format!("Invalid base64 audio: {}", e)),
+        })),
+    };
+
+    if audio_bytes.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            success: false, data: None,
+            error: Some("Empty audio payload".to_string()),
+        }));
+    }
+
+    // Forward to whisper.cpp / Parakeet server (whisper.cpp multipart API)
+    let client = reqwest::Client::new();
+    let part = reqwest::multipart::Part::bytes(audio_bytes)
+        .file_name("audio.webm")
+        .mime_str("audio/webm")
+        .unwrap_or_else(|_| reqwest::multipart::Part::bytes(vec![]));
+    let form = reqwest::multipart::Form::new().part("file", part);
+
+    match client
+        .post("http://localhost:8004/inference")
+        .multipart(form)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    let text = data
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    (StatusCode::OK, Json(ApiResponse {
+                        success: true,
+                        data: Some(serde_json::json!({ "transcript": text })),
+                        error: None,
+                    }))
+                }
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse {
+                    success: false, data: None,
+                    error: Some(format!("ASR response parse error: {}", e)),
+                })),
+            }
+        }
+        _ => (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some("Parakeet ASR not running on localhost:8004 — browser fallback active".to_string()),
+        })),
+    }
 }
 
 async fn miranda_generate(
@@ -625,14 +676,57 @@ async fn miranda_generate(
 }
 
 async fn miranda_speak(
-    Json(_req): Json<MirandaSpeakRequest>,
+    Json(req): Json<MirandaSpeakRequest>,
 ) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
-    // TTS server wiring arrives in Phase 2.
-    (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
-        success: false,
-        data: None,
-        error: Some("TTS server not yet running on localhost:8005. Phase 2 wires VibeVoice/Parler.".to_string()),
-    }))
+    if req.text.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse {
+            success: false, data: None,
+            error: Some("Empty text".to_string()),
+        }));
+    }
+
+    let client = reqwest::Client::new();
+
+    // Try OpenAI-compatible TTS endpoint (kokoro-fastapi, piper-tts-server, etc.)
+    let payload = serde_json::json!({
+        "model": "kokoro",
+        "input": req.text,
+        "voice": "af_sarah",  // kokoro female voice
+        "response_format": "mp3",
+        "speed": 0.95
+    });
+
+    match client
+        .post("http://localhost:8005/v1/audio/speech")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.bytes().await {
+                Ok(audio_bytes) => {
+                    let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&audio_bytes);
+                    (StatusCode::OK, Json(ApiResponse {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "audio_b64": audio_b64,
+                            "format": "mp3"
+                        })),
+                        error: None,
+                    }))
+                }
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse {
+                    success: false, data: None,
+                    error: Some(format!("TTS audio read error: {}", e)),
+                })),
+            }
+        }
+        _ => (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some("TTS server not running on localhost:8005 — browser fallback active".to_string()),
+        })),
+    }
 }
 
 async fn miranda_memory_search(

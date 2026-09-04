@@ -73,6 +73,67 @@ start_miranda() {
   echo "  Miranda PID: ${PIDS[-1]}"
 }
 
+# ── Parakeet 110M ASR (port 8004, whisper.cpp server) ────────────────────────
+start_parakeet() {
+  if [ -z "$PARAKEET_MODEL" ] || [ ! -f "$PARAKEET_MODEL" ]; then
+    echo "⚠  No Parakeet model found under $VAULT/models/parakeet-110m/"
+    echo "   ASR will use browser SpeechRecognition fallback."
+    return 1
+  fi
+
+  # Try whisper.cpp server (--port flag, same binary as llama-server on some builds)
+  WHISPER_SERVER="${WHISPER_SERVER:-$(command -v whisper-server 2>/dev/null || echo "$VAULT/bin/whisper-server")}"
+  if [ ! -x "$WHISPER_SERVER" ]; then
+    # Some llama.cpp builds ship whisper support in llama-server itself
+    WHISPER_SERVER="$LLAMA_SERVER"
+  fi
+
+  if [ ! -x "$WHISPER_SERVER" ]; then
+    echo "⚠  No whisper-server binary. ASR browser fallback active."
+    return 1
+  fi
+
+  echo "Starting Parakeet ASR on port $PARAKEET_PORT..."
+  "$WHISPER_SERVER" \
+    --model "$PARAKEET_MODEL" \
+    --port "$PARAKEET_PORT" \
+    --host 127.0.0.1 \
+    > "$CRANE_HOME/.crane/parakeet.log" 2>&1 &
+  PIDS+=($!)
+  echo "  Parakeet PID: ${PIDS[-1]}"
+}
+
+# ── TTS server (port 8005) ────────────────────────────────────────────────────
+start_tts() {
+  if [ -z "$TTS_MODEL" ] || [ ! -f "$TTS_MODEL" ]; then
+    echo "⚠  No TTS model found in vault. TTS will use browser SpeechSynthesis fallback."
+    return 1
+  fi
+
+  # Try kokoro-fastapi (Python, OpenAI-compatible) if installed
+  if command -v kokoro-serve &>/dev/null; then
+    echo "Starting Kokoro TTS (kokoro-serve) on port $TTS_PORT..."
+    KOKORO_MODEL="$TTS_MODEL" kokoro-serve --port "$TTS_PORT" --host 127.0.0.1 \
+      > "$CRANE_HOME/.crane/tts.log" 2>&1 &
+    PIDS+=($!)
+    echo "  TTS PID: ${PIDS[-1]}"
+    return 0
+  fi
+
+  # Try piper TTS if installed
+  if command -v piper &>/dev/null; then
+    echo "Starting Piper TTS on port $TTS_PORT..."
+    piper --model "$TTS_MODEL" --port "$TTS_PORT" \
+      > "$CRANE_HOME/.crane/tts.log" 2>&1 &
+    PIDS+=($!)
+    echo "  TTS PID: ${PIDS[-1]}"
+    return 0
+  fi
+
+  echo "⚠  No TTS server binary (kokoro-serve, piper). Browser SpeechSynthesis fallback active."
+  return 1
+}
+
 # ── CRANE backend (port 8002) ─────────────────────────────────────────────────
 start_backend() {
   BACKEND_BIN="$SCRIPT_DIR/target/release/crane-backend"
@@ -99,7 +160,9 @@ echo "CRANE_HOME: $CRANE_HOME"
 echo "VAULT:      $VAULT"
 echo ""
 
-start_miranda || echo "  Miranda will be available once model is downloaded (scripts/download-models.sh)"
+start_miranda || echo "  Miranda will be available once model is in GGUF format (check: ls -la $VAULT/models/qwen-voice-agent/)"
+start_parakeet || true
+start_tts || true
 start_backend
 
 sleep 2
@@ -107,7 +170,7 @@ sleep 2
 # Health check
 echo ""
 echo "Service status:"
-for port_name in "8002:Backend:/api/health" "8003:Miranda-3B:/v1/models"; do
+for port_name in "8002:Backend:/api/health" "8003:Miranda-3B:/v1/models" "8004:Parakeet-ASR:/health" "8005:TTS:/health"; do
   port="${port_name%%:*}"
   rest="${port_name#*:}"
   name="${rest%%:*}"
