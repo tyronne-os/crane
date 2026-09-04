@@ -7,16 +7,37 @@ const API = 'http://localhost:8002';
 
 // ===== Miranda Voice Panel =====
 
-function MirandaVoicePanel({ isOpen, onToggle }) {
+// Detect project-creation voice commands.
+// Returns { name, containerized } or null.
+function parseCreateProject(text) {
+  // Catches: "create [a/new] [rust/python/go/js] project [called/named] <name>"
+  // Also: "make/start/build a project called <name>", "spin up a project <name>"
+  const m = text.match(
+    /(?:create|make|start|build|spin\s+up)\s+(?:a\s+)?(?:new\s+)?(?:rust|python|go|js|javascript|node|typescript)?\s*project\s+(?:called|named|for me called|for me named)?\s*['"]?([\w][\w-]*)['"]?/i
+  );
+  if (!m) return null;
+  return {
+    name: m[1].toLowerCase().replace(/\s+/g, '-'),
+    containerized: /container|podman|docker/i.test(text),
+  };
+}
+
+function MirandaVoicePanel({ isOpen, onToggle, onProjectCreated }) {
   const [status, setStatus] = useState('idle'); // idle | listening | thinking | speaking
   const [transcript, setTranscript] = useState('');
   const [response, setResponse] = useState('');
   const [sessionId] = useState(() => crypto.randomUUID());
   const [memoryNote, setMemoryNote] = useState(null);
   const [waveform, setWaveform] = useState(Array(12).fill(4));
+  const [actions, setActions] = useState([]); // visible action log (autonomy requirement)
   const mediaRef = useRef(null);
   const animRef = useRef(null);
   const transcriptRef = useRef('');
+
+  const logAction = (text) => {
+    const entry = { id: Date.now(), text, time: new Date().toLocaleTimeString() };
+    setActions(prev => [entry, ...prev].slice(0, 8)); // keep last 8
+  };
 
   // Fake waveform animation when listening
   useEffect(() => {
@@ -160,11 +181,35 @@ function MirandaVoicePanel({ isOpen, onToggle }) {
   const sendToMiranda = async (text) => {
     if (!text?.trim()) { setStatus('idle'); return; }
     setStatus('thinking');
+
+    // ── Voice command detection (runs before LLM so Miranda can acknowledge) ──
+    let commandContext = '';
+    const cmd = parseCreateProject(text);
+    if (cmd) {
+      try {
+        const res = await fetch(`${API}/api/projects/create`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: cmd.name, language: 'rust', containerized: cmd.containerized }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          logAction(`Created project: ${cmd.name}`);
+          commandContext = ` [ACTION COMPLETED: Created Rust project '${cmd.name}' successfully]`;
+          if (onProjectCreated) onProjectCreated(data.data);
+        } else {
+          commandContext = ` [ACTION FAILED: ${data.error}]`;
+        }
+      } catch (e) {
+        commandContext = ` [ACTION FAILED: ${e.message}]`;
+      }
+    }
+
     try {
       const res = await fetch(`${API}/api/miranda/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript: text, session_id: sessionId }),
+        body: JSON.stringify({ transcript: text + commandContext, session_id: sessionId }),
       });
       const data = await res.json();
       if (data.success) {
@@ -187,7 +232,6 @@ function MirandaVoicePanel({ isOpen, onToggle }) {
           }
         } catch (_) {}
 
-        // Fall back to browser SpeechSynthesis
         if (!ttsHandled) speakWithBrowser(responseText);
       } else {
         setResponse(data.error || 'Miranda is offline. Check localhost:8003.');
@@ -263,6 +307,20 @@ function MirandaVoicePanel({ isOpen, onToggle }) {
         <div style={{ fontSize: '10px', color: '#f59e0b' }}>📚 {memoryNote}</div>
       )}
 
+      {/* Action log — always visible, non-hideable (autonomy requirement) */}
+      {actions.length > 0 && (
+        <div style={{ fontSize: '10px', color: '#64748b', borderTop: '1px solid rgba(100,116,139,0.2)', paddingTop: '6px' }}>
+          <div style={{ color: '#475569', marginBottom: '3px', fontWeight: '600', letterSpacing: '0.05em' }}>ACTIONS</div>
+          {actions.map(a => (
+            <div key={a.id} style={{ display: 'flex', gap: '4px', marginBottom: '2px' }}>
+              <span style={{ color: '#334155' }}>{a.time}</span>
+              <span style={{ color: '#10b981' }}>✓</span>
+              <span>{a.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Controls */}
       <div style={{ display: 'flex', gap: '6px' }}>
         {status === 'idle' && (
@@ -291,7 +349,7 @@ function MirandaVoicePanel({ isOpen, onToggle }) {
 
 // ===== Left Sidebar =====
 
-function Sidebar({ projects, currentProject, onSelectProject, onNewProject }) {
+function Sidebar({ projects, currentProject, onSelectProject, onNewProject, onProjectCreated }) {
   const [mirandaOpen, setMirandaOpen] = useState(true);
 
   return (
@@ -338,7 +396,7 @@ function Sidebar({ projects, currentProject, onSelectProject, onNewProject }) {
 
       {/* Miranda panel at the bottom */}
       <div style={{ padding: '8px', borderTop: '1px solid #334155' }}>
-        <MirandaVoicePanel isOpen={mirandaOpen} onToggle={() => setMirandaOpen(o => !o)} />
+        <MirandaVoicePanel isOpen={mirandaOpen} onToggle={() => setMirandaOpen(o => !o)} onProjectCreated={onProjectCreated} />
       </div>
     </div>
   );
@@ -466,6 +524,7 @@ function App() {
         currentProject={currentProject}
         onSelectProject={setCurrentProject}
         onNewProject={() => setShowNewProject(true)}
+        onProjectCreated={handleCreated}
       />
 
       <div style={{ flex: 1, overflow: 'hidden' }}>
