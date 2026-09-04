@@ -68,7 +68,7 @@ function App() {
       {view === 'splash' ? (
         <>
           <div style={{ fontSize: '80px', marginBottom: '20px', filter: 'drop-shadow(0 0 10px rgba(59, 130, 246, 0.5))' }}>🏗️</div>
-          <h1 style={{ fontSize: '32px', marginBottom: '30px', fontWeight: '700' }}>Qwen Kiro IDE</h1>
+          <h1 style={{ fontSize: '32px', marginBottom: '30px', fontWeight: '700' }}>CRANE</h1>
           
           {projects.length > 0 && (
             <div style={{ marginBottom: '30px', textAlign: 'center' }}>

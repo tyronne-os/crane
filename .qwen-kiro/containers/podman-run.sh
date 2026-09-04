@@ -10,8 +10,8 @@ if [ -z "$PROJECT_NAME" ]; then
 fi
 
 # Build container image
-podman build -t "qwen-kiro-${PROJECT_NAME}:latest" \
-  -f .qwen-kiro/containers/Containerfile \
+podman build -t "crane-${PROJECT_NAME}:latest" \
+  -f .crane/containers/Containerfile \
   "${PROJECT_PATH}"
 
 # Run container (rootless, safer)
@@ -21,4 +21,4 @@ podman run -it --rm \
   -p 8001:8001 \
   -p 8002:8002 \
   --userns=keep-id \
-  "qwen-kiro-${PROJECT_NAME}:latest"
+  "crane-${PROJECT_NAME}:latest"

@@ -21,7 +21,7 @@ uv sync
 
 # Initialize git
 git init
-git config user.name "Qwen Kiro"
+git config user.name "CRANE"
 git config user.email "kiro@local"
 git add .
 git commit -m "init: Create new Rust+Python project"

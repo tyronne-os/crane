@@ -16,7 +16,7 @@ sudo apt install podman
 ## Step 2: Build Backend (2 min)
 
 ```bash
-cd /mnt/NOBILITY_VAULT/qwen-kiro-ide
+cd /mnt/NOBILITY_VAULT/crane-ide
 cargo build --release
 ```
 
@@ -28,14 +28,14 @@ cargo build --release
 
 **You should see:**
 ```
-🏗️  Starting Qwen Kiro IDE...
+🏗️  Starting CRANE...
 Starting backend (port 8002)...
 Starting frontend...
 ```
 
 **A window appears with:**
 - 🏗️ icon (construction crane)
-- "Qwen Kiro IDE" title
+- "CRANE" title
 - "✨ New Project" button (or recent projects if any exist)
 
 ## Step 4: Create Test Project (1 min)
@@ -58,7 +58,7 @@ Project name: my-test-app
 
 ## Done ✓
 
-You now have a working Qwen Kiro IDE with:
+You now have a working CRANE with:
 - ✅ Splash screen showing projects
 - ✅ Create new project (local or Podman)
 - ✅ Auto venv with UV

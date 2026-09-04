@@ -106,7 +106,7 @@ async fn create_project(
     let _ = Command::new("git")
         .arg("config")
         .arg("user.name")
-        .arg("Qwen Kiro")
+        .arg("CRANE")
         .current_dir(&project_path)
         .status();
     let _ = Command::new("git")

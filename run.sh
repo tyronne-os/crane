@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# Start Qwen Kiro IDE
+# Start CRANE
 # This script:
 # 1. Starts the Rust backend (project manager)
 # 2. Starts the React frontend (Tauri window)
 # 3. Manages Podman/Docker container lifecycle
 
-PROJECT_ROOT="/mnt/NOBILITY_VAULT/qwen-kiro-ide"
+PROJECT_ROOT="/mnt/NOBILITY_VAULT/crane-ide"
 cd "$PROJECT_ROOT"
 
-echo "🏗️  Starting Qwen Kiro IDE..."
+echo "🏗️  Starting CRANE..."
 
 # Start backend (Rust)
 echo "Starting backend (port 8002)..."

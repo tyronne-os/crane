@@ -1,4 +1,4 @@
-# 🏗️ Qwen Kiro IDE
+# 🏗️ CRANE
 
 **Desktop IDE** for local Rust+Python development, powered by Qwen LLMs.
 
@@ -35,7 +35,7 @@ sudo apt install docker.io
 ### 2. Build & Run
 
 ```bash
-cd /mnt/NOBILITY_VAULT/qwen-kiro-ide
+cd /mnt/NOBILITY_VAULT/crane-ide
 
 # Build Rust backend
 cargo build --release
@@ -46,7 +46,7 @@ cargo build --release
 
 **Expected output:**
 ```
-🏗️  Starting Qwen Kiro IDE...
+🏗️  Starting CRANE...
 Starting backend (port 8002)...
 Starting frontend...
 ```
@@ -57,10 +57,10 @@ The app creates a `.desktop` icon automatically:
 
 ```bash
 # Icon location
-~/.local/share/applications/qwen-kiro.desktop
+~/.local/share/applications/crane.desktop
 
 # Click on desktop (or launcher) to open
-# It will show: 🏗️ Qwen Kiro IDE
+# It will show: 🏗️ CRANE
 ```
 
 ---
@@ -71,7 +71,7 @@ The app creates a `.desktop` icon automatically:
 
 **If projects exist:**
 ```
-🏗️ Qwen Kiro IDE
+🏗️ CRANE
 ────────────────
 Recent Projects:
   [my-app] [rust] 💻 local
@@ -157,7 +157,7 @@ WORKDIR /workspace
 ## File Structure
 
 ```
-/mnt/NOBILITY_VAULT/qwen-kiro-ide/
+/mnt/NOBILITY_VAULT/crane-ide/
 ├── Cargo.toml (workspace: backend + Tauri)
 ├── backend/
 │   ├── Cargo.toml (Axum server)
@@ -168,7 +168,7 @@ WORKDIR /workspace
 │   │   ├── vite.config.js
 │   │   └── package.json (React only, minimal)
 │   └── src/main.rs (Tauri app shell)
-├── .qwen-kiro/
+├── .crane/
 │   ├── containers/
 │   │   ├── Containerfile (Podman recipe)
 │   │   └── podman-run.sh (launch container)
@@ -185,7 +185,7 @@ WORKDIR /workspace
 ### Local Rust Project (Default)
 
 ```bash
-# Open Qwen Kiro IDE
+# Open CRANE
 # → Click "+ New Project"
 # → Name: "my-app"
 # → Uncheck "Containerized"
@@ -216,7 +216,7 @@ uv sync
 ### Containerized Rust+Python Project
 
 ```bash
-# Open Qwen Kiro IDE
+# Open CRANE
 # → Click "+ New Project"
 # → Name: "web-app"
 # → Check "Containerized"
@@ -233,7 +233,7 @@ uv sync
 
 **Run in container:**
 ```bash
-cd /mnt/NOBILITY_VAULT/qwen-kiro-ide
+cd /mnt/NOBILITY_VAULT/crane-ide
 ./podman-run.sh web-app
 
 # Inside container:
@@ -271,7 +271,7 @@ pip install uv
 update-desktop-database ~/.local/share/applications/
 
 # Or try opening directly:
-/mnt/NOBILITY_VAULT/qwen-kiro-ide/run.sh
+/mnt/NOBILITY_VAULT/crane-ide/run.sh
 ```
 
 **Backend fails to start?**
