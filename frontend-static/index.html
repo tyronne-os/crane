@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🏗️ CRANE</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .container {
+      text-align: center;
+      max-width: 600px;
+      padding: 40px;
+    }
+    .icon { font-size: 80px; margin-bottom: 20px; filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.5)); }
+    h1 { font-size: 32px; margin-bottom: 10px; font-weight: 700; }
+    .subtitle { color: #94a3b8; margin-bottom: 30px; }
+    .projects { margin: 30px 0; }
+    .project-list { list-style: none; min-width: 400px; }
+    .project-item {
+      padding: 12px 16px;
+      margin: 8px 0;
+      background: rgba(148, 163, 184, 0.1);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: left;
+    }
+    .project-item:hover { background: rgba(148, 163, 184, 0.2); }
+    .project-name { font-weight: 600; }
+    .project-meta { font-size: 12px; color: #94a3b8; margin-left: 10px; }
+    .btn {
+      padding: 12px 24px;
+      margin-top: 20px;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+      transition: all 0.2s ease;
+    }
+    .btn:hover { background: linear-gradient(135deg, #2563eb, #1d4ed8); }
+    .form {
+      margin-top: 30px;
+      display: none;
+    }
+    .form.show { display: block; }
+    input[type="text"] {
+      padding: 12px 16px;
+      margin-bottom: 20px;
+      border-radius: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      width: 350px;
+      background: rgba(148, 163, 184, 0.1);
+      color: #e2e8f0;
+      font-size: 14px;
+      outline: none;
+    }
+    .checkbox-group {
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    .btn-group {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+    .btn-green {
+      background: #22c55e;
+    }
+    .btn-green:hover { background: #16a34a; }
+    .btn-gray {
+      background: rgba(148, 163, 184, 0.3);
+    }
+    .btn-gray:hover { background: rgba(148, 163, 184, 0.4); }
+    .loading { opacity: 0.5; cursor: not-allowed; }
+    .error { color: #ef4444; margin-top: 10px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">🏗️</div>
+    <h1>CRANE</h1>
+    <p class="subtitle">Spec-driven Rust + Python with Podman</p>
+
+    <div id="splash" class="splash">
+      <div class="projects" id="projectsContainer" style="display:none;">
+        <h2 style="margin-bottom: 15px; color: #94a3b8;">Recent Projects</h2>
+        <ul class="project-list" id="projectsList"></ul>
+      </div>
+      <button class="btn" onclick="showForm()">✨ New Project</button>
+    </div>
+
+    <div id="formView" class="form">
+      <h2 style="margin-bottom: 30px;">Create New Rust Project</h2>
+      <input type="text" id="projectName" placeholder="Project name (e.g., my-app)" onkeydown="if(event.key==='Enter') createProject()">
+      
+      <div class="checkbox-group">
+        <input type="checkbox" id="containerized">
+        <label for="containerized" style="cursor: pointer; font-size: 14px;">📦 Run in Podman container</label>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-green" id="createBtn" onclick="createProject()">✅ Create</button>
+        <button class="btn btn-gray" onclick="hideForm()">Cancel</button>
+      </div>
+      <div id="error" class="error"></div>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = 'http://localhost:8002';
+
+    function showForm() { 
+      document.getElementById('splash').style.display = 'none';
+      document.getElementById('formView').classList.add('show');
+    }
+    
+    function hideForm() {
+      document.getElementById('splash').style.display = 'block';
+      document.getElementById('formView').classList.remove('show');
+      document.getElementById('projectName').value = '';
+      document.getElementById('error').textContent = '';
+    }
+
+    async function loadProjects() {
+      try {
+        const res = await fetch(`${API_URL}/api/projects`);
+        const data = await res.json();
+        const projects = data.data || [];
+        
+        if (projects.length > 0) {
+          const list = document.getElementById('projectsList');
+          list.innerHTML = projects.map(p => `
+            <li class="project-item">
+              <span class="project-name">${p.name}</span>
+              <span class="project-meta">[${p.language}] ${p.containerized ? '📦 podman' : '💻 local'}</span>
+            </li>
+          `).join('');
+          document.getElementById('projectsContainer').style.display = 'block';
+        }
+      } catch (e) {
+        console.error('Failed to load projects:', e);
+      }
+    }
+
+    async function createProject() {
+      const name = document.getElementById('projectName').value.trim();
+      if (!name) return;
+      
+      document.getElementById('createBtn').disabled = true;
+      document.getElementById('createBtn').classList.add('loading');
+      
+      try {
+        const res = await fetch(`${API_URL}/api/projects/create`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            language: 'rust',
+            containerized: document.getElementById('containerized').checked
+          })
+        });
+        
+        const data = await res.json();
+        if (data.success) {
+          alert(`✅ Project created: ${name}\n\nLocation: /mnt/NOBILITY_VAULT/projects/${name}`);
+          hideForm();
+          loadProjects();
+        } else {
+          document.getElementById('error').textContent = `Error: ${data.error}`;
+        }
+      } catch (e) {
+        document.getElementById('error').textContent = `Error: ${e.message}`;
+      } finally {
+        document.getElementById('createBtn').disabled = false;
+        document.getElementById('createBtn').classList.remove('loading');
+      }
+    }
+
+    // Load on startup
+    loadProjects();
+  </script>
+</body>
+</html>

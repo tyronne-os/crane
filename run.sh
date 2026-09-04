@@ -1,31 +1,65 @@
 #!/bin/bash
+set -e
 
-# Start CRANE
-# This script:
-# 1. Starts the Rust backend (project manager)
-# 2. Starts the React frontend (Tauri window)
-# 3. Manages Podman/Docker container lifecycle
+PROJECT_ROOT="/mnt/NOBILITY_VAULT/qwen-kiro-ide"
+BACKEND_BIN="$PROJECT_ROOT/target/release/crane-backend"
+FRONTEND_DIR="$PROJECT_ROOT/frontend-static"
+FRONTEND_PORT=5173
+BACKEND_PORT=8002
 
-PROJECT_ROOT="/mnt/NOBILITY_VAULT/crane-ide"
-cd "$PROJECT_ROOT"
+# Verify backend binary exists
+if [ ! -f "$BACKEND_BIN" ]; then
+  echo "❌ Backend binary not found at $BACKEND_BIN"
+  echo "Run: cd $PROJECT_ROOT/backend && cargo build --release"
+  exit 1
+fi
 
-echo "🏗️  Starting CRANE..."
+# Verify frontend exists
+if [ ! -f "$FRONTEND_DIR/index.html" ]; then
+  echo "❌ Frontend not found at $FRONTEND_DIR/index.html"
+  exit 1
+fi
 
-# Start backend (Rust)
-echo "Starting backend (port 8002)..."
-cd backend && cargo run --release &
+# Start backend
+echo "🏗️  Starting CRANE Backend..."
+"$BACKEND_BIN" &
 BACKEND_PID=$!
-cd ..
-
-# Wait for backend to be ready
 sleep 2
 
-# Start frontend (Tauri window)
-echo "Starting frontend..."
-cd src-tauri/frontend && npm run dev &
+# Check if backend started
+if ! kill -0 $BACKEND_PID 2>/dev/null; then
+  echo "❌ Failed to start backend"
+  exit 1
+fi
+
+echo "✅ Backend started (PID: $BACKEND_PID)"
+
+# Start simple HTTP server for frontend
+echo "🌐 Starting Frontend Server (port $FRONTEND_PORT)..."
+cd "$FRONTEND_DIR"
+python3 -m http.server $FRONTEND_PORT > /dev/null 2>&1 &
 FRONTEND_PID=$!
+sleep 1
 
-# Wait for signals
-trap "kill $BACKEND_PID $FRONTEND_PID" EXIT
+echo "✅ Frontend started (PID: $FRONTEND_PID)"
+echo ""
+echo "╔════════════════════════════════════════╗"
+echo "║  🏗️  CRANE is running!                  ║"
+echo "║                                        ║"
+echo "║  Frontend: http://localhost:$FRONTEND_PORT         ║"
+echo "║  Backend:  http://localhost:$BACKEND_PORT         ║"
+echo "║                                        ║"
+echo "║  Press Ctrl+C to stop                  ║"
+echo "╚════════════════════════════════════════╝"
+echo ""
 
-wait
+# Open browser (if available)
+if command -v xdg-open &> /dev/null; then
+  sleep 1
+  xdg-open "http://localhost:$FRONTEND_PORT" &
+fi
+
+# Keep processes alive
+trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit 0" EXIT INT TERM
+
+wait $BACKEND_PID $FRONTEND_PID
