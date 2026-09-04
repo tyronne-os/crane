@@ -107,13 +107,15 @@ sleep 2
 # Health check
 echo ""
 echo "Service status:"
-for port_name in "8002:Backend" "8003:Miranda-3B"; do
+for port_name in "8002:Backend:/api/health" "8003:Miranda-3B:/v1/models"; do
   port="${port_name%%:*}"
-  name="${port_name##*:}"
-  if curl -s "http://127.0.0.1:$port/health" > /dev/null 2>&1; then
-    echo "  ✅ $name (port $port)"
+  rest="${port_name#*:}"
+  name="${rest%%:*}"
+  path="${rest##*:}"
+  if curl -s "http://127.0.0.1:$port$path" > /dev/null 2>&1; then
+    echo "  ✅  $name (port $port)"
   else
-    echo "  ⚠  $name (port $port) — not yet responding (may still be loading)"
+    echo "  ⚠   $name (port $port) — not yet responding (may still be loading model)"
   fi
 done
 

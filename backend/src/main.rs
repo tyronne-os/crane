@@ -440,7 +440,7 @@ async fn miranda_transcribe(
     (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
         success: false,
         data: None,
-        error: Some("Parakeet ASR server not yet running on localhost:8003. Start with: llama-server -m <parakeet.gguf> --port 8003".to_string()),
+        error: Some("Parakeet ASR server not yet running on localhost:8004. Start with: llama-server -m <parakeet.gguf> --port 8004".to_string()),
     }))
 }
 
@@ -500,7 +500,7 @@ async fn miranda_speak(
     (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
         success: false,
         data: None,
-        error: Some("TTS server not yet running on localhost:8004. Phase 2 wires VibeVoice/Parler.".to_string()),
+        error: Some("TTS server not yet running on localhost:8005. Phase 2 wires VibeVoice/Parler.".to_string()),
     }))
 }
 

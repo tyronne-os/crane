@@ -16,6 +16,7 @@ function MirandaVoicePanel({ isOpen, onToggle }) {
   const [waveform, setWaveform] = useState(Array(12).fill(4));
   const mediaRef = useRef(null);
   const animRef = useRef(null);
+  const transcriptRef = useRef('');
 
   // Fake waveform animation when listening
   useEffect(() => {
@@ -52,11 +53,14 @@ function MirandaVoicePanel({ isOpen, onToggle }) {
     recognition.onresult = (e) => {
       const text = Array.from(e.results).map(r => r[0].transcript).join('');
       setTranscript(text);
+      transcriptRef.current = text;
     };
 
     recognition.onend = async () => {
-      if (transcript || mediaRef.current) {
-        await sendToMiranda(transcript || mediaRef.current);
+      const finalText = transcriptRef.current;
+      transcriptRef.current = '';
+      if (finalText.trim()) {
+        await sendToMiranda(finalText);
       }
     };
 

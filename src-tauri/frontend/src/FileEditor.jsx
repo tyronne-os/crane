@@ -17,7 +17,7 @@ export function FileEditor({ projectName }) {
     try {
       const response = await fetch(`http://localhost:8002/api/files/tree?project=${projectName}`);
       const data = await response.json();
-      setFiles(data.tree || []);
+      setFiles(data.data || data.tree || []);
     } catch (err) {
       console.error('Error loading file tree:', err);
     }
@@ -30,7 +30,7 @@ export function FileEditor({ projectName }) {
         `http://localhost:8002/api/files/read?project=${projectName}&path=${encodeURIComponent(filePath)}`
       );
       const data = await response.json();
-      setFileContent(data.content || '');
+      setFileContent(data.data?.content || data.content || '');
       setSelectedFile(filePath);
     } catch (err) {
       console.error('Error loading file:', err);
