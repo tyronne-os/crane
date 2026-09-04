@@ -319,3 +319,36 @@ from work prior to this migration, unrelated to it. These were stashed
 (`git stash`) rather than discarded, so they are not lost — whoever
 continues this work should run `git stash list` and `git stash show -p`
 to inspect and decide whether to re-apply them.
+
+---
+
+## 8. Save status — GitHub confirmed complete, HF backup blocked (pre-existing issue)
+
+**GitHub (`tyronne-os/crane`, branch `miranda-crane-migration`): fully saved
+and verified.** All 57 migrated files confirmed present via
+`git ls-tree -r origin/miranda-crane-migration` matching the local disk file
+count exactly. Branch correctly shows "1 commit ahead of master" — meaning
+it now contains master's full real history (Tauri app, backend, the
+pre-existing Miranda spec) plus this migration on top, not the earlier
+incomplete 2-commit snapshot.
+
+**Hugging Face backup (`AIBRUH/crane` dataset): push blocked, pre-existing
+issue, not caused by this migration.** The push was rejected because two
+old build-artifact files (`target/release/deps/libsyn-*.rlib`,
+`libtokio-*.rlib`) exist in the branch's git history from commit `1cd6f77`
+(before a later commit `ac1d113` added a `.gitignore` to exclude
+`target/`). GitHub accepted these fine; Hugging Face's dataset-repo storage
+policy requires Git LFS for files this large and rejects the push outright.
+**This is not specific to the migration commit — it's inherited from
+`origin/master`'s own history**, which is why GitHub (which already has
+this same history merged) had no problem with it.
+
+**This was not resolved automatically because the fix requires rewriting
+git history** (removing the old binary blobs from history via
+`git filter-repo` or similar, or migrating those specific paths to Git LFS
+retroactively) — a destructive, hard-to-reverse operation that should not
+be done without the project owner's explicit go-ahead, since it rewrites
+commit hashes for everyone who has this repo cloned. **GitHub is the
+verified, complete, saved copy right now.** The HF backup is stale for this
+branch until that history issue is deliberately addressed.
+
