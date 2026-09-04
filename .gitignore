@@ -11,3 +11,4 @@ build/
 *~
 .cargo/
 .idea/
+.crane/
