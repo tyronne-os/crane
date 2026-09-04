@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1e293b;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="craneGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1e40af;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bgGrad)"/>
+  <g transform="translate(128, 80)">
+    <circle cx="0" cy="-35" r="12" fill="url(#craneGrad)"/>
+    <path d="M 0 -23 Q -8 -10 -10 10 L -5 10" stroke="url(#craneGrad)" stroke-width="8" fill="none" stroke-linecap="round"/>
+    <path d="M 0 -23 Q 8 -10 10 10 L 5 10" stroke="url(#craneGrad)" stroke-width="8" fill="none" stroke-linecap="round"/>
+    <ellipse cx="0" cy="25" rx="20" ry="30" fill="url(#craneGrad)"/>
+    <path d="M -15 20 Q -45 15 -50 35" stroke="url(#craneGrad)" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <path d="M 15 20 Q 45 15 50 35" stroke="url(#craneGrad)" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <line x1="-8" y1="55" x2="-8" y2="75" stroke="url(#craneGrad)" stroke-width="5" stroke-linecap="round"/>
+    <line x1="8" y1="55" x2="8" y2="75" stroke="url(#craneGrad)" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="-8" cy="78" r="4" fill="url(#craneGrad)"/>
+    <circle cx="8" cy="78" r="4" fill="url(#craneGrad)"/>
+  </g>
+  <circle cx="128" cy="128" r="115" fill="none" stroke="#3b82f6" stroke-width="1" opacity="0.3"/>
+</svg>
