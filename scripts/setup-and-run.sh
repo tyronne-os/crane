@@ -45,14 +45,7 @@ else
   echo "  ⚠  $VAULT not found — set NOBILITY_VAULT env var if it's mounted elsewhere"
 fi
 
-MIRANDA_MODEL_FOUND="$(find "$VAULT/models" -iname "*3b*abliterated*.gguf" 2>/dev/null | head -1)"
-if [ -z "$MIRANDA_MODEL_FOUND" ]; then
-  echo ""
-  echo "  Miranda model not found. Downloading..."
-  bash scripts/download-models.sh
-else
-  echo "  ✅ Miranda model: $MIRANDA_MODEL_FOUND"
-fi
+bash scripts/download-models.sh
 
 # ── 4. Check llama-server ────────────────────────────────────────────────────
 echo ""

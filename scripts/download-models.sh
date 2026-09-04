@@ -1,50 +1,43 @@
 #!/bin/bash
-# Downloads the best uncensored conversational + top small coding models
-# to NOBILITY_VAULT (your local 100GB drive)
+# Verifies the models CRANE needs are already in NOBILITY_VAULT.
+# Disk is 89% full (13GB free) — this does NOT download anything by default.
+# Everything Miranda/coder need is already on disk per the confirmed inventory:
+#   qwen-voice-agent (1.8GB)   — Miranda's brain, Qwen 2.5 3B abliterated
+#   qwen-coder-1.5b-local (1.1GB) — coding model
+#   parakeet-110m (170MB)      — ASR, Phase 2
+#   vibevoice-1.5b (5.1GB)     — TTS, Phase 2
+#   kokoro-82m (313MB)         — TTS fallback
 
 VAULT="${NOBILITY_VAULT:-/mnt/NOBILITY_VAULT}"
 
-check_hf() {
-  if ! command -v huggingface-cli &>/dev/null; then
-    pip install -q huggingface_hub 2>/dev/null || true
-  fi
-}
-
-download_gguf() {
-  local repo="$1" file="$2" dest_dir="$3"
-  mkdir -p "$dest_dir"
-  local dest="$dest_dir/$file"
-  if [ -f "$dest" ]; then
-    echo "  Already have: $dest"
-    return
-  fi
-  echo "  Downloading $file from $repo..."
-  huggingface-cli download "$repo" "$file" --local-dir "$dest_dir" --local-dir-use-symlinks False
-}
-
-check_hf
-
 echo ""
-echo "=== CRANE Model Setup ==="
+echo "=== CRANE Model Check ==="
 echo "VAULT: $VAULT"
 echo ""
 
-# ── Miranda voice brain: best uncensored 3B for conversation ──────────────────
-echo "[1/2] Miranda brain — Qwen2.5-3B-Instruct abliterated (uncensored)"
-echo "      Source: bartowski/Qwen2.5-3B-Instruct-abliterated-GGUF"
-download_gguf \
-  "bartowski/Qwen2.5-3B-Instruct-abliterated-GGUF" \
-  "Qwen2.5-3B-Instruct-abliterated-Q4_K_M.gguf" \
-  "$VAULT/models/qwen-voice-agent"
+check_model() {
+  local name="$1" dir="$2"
+  local found
+  found="$(find "$dir" -iname "*.gguf" -o -iname "*.safetensors" -o -iname "*.bin" 2>/dev/null | head -1)"
+  if [ -n "$found" ]; then
+    echo "  ✅ $name: $found"
+  else
+    echo "  ⚠  $name: no model file found in $dir"
+    echo "     ls -la $dir  (contents may need a different --iname pattern)"
+  fi
+}
 
-# ── Coding model: top small coder ────────────────────────────────────────────
-echo ""
-echo "[2/2] Coder — Qwen2.5-Coder-7B-Instruct Q4_K_M (best small coder)"
-echo "      Source: Qwen/Qwen2.5-Coder-7B-Instruct-GGUF"
-download_gguf \
-  "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF" \
-  "qwen2.5-coder-7b-instruct-q4_k_m.gguf" \
-  "$VAULT/models/qwen-coder"
+check_model "Miranda brain (Qwen 2.5 3B abliterated)" "$VAULT/models/qwen-voice-agent"
+check_model "Coder (qwen-coder-1.5b-local)"            "$VAULT/models/qwen-coder-1.5b-local"
+check_model "Parakeet ASR (110m)"                       "$VAULT/models/parakeet-110m"
+check_model "VibeVoice TTS (1.5b)"                      "$VAULT/models/vibevoice-1.5b"
+check_model "Kokoro TTS fallback (82m)"                 "$VAULT/models/kokoro-82m"
 
 echo ""
-echo "Done. Run ./run.sh to start CRANE."
+echo "Disk: $(df -h "$VAULT" 2>/dev/null | tail -1 | awk '{print $4" free of "$2" ("$5" used)"}')"
+echo ""
+echo "Everything above should already be present — this script does not"
+echo "download by default since the vault is nearly full. If a model is"
+echo "genuinely missing, download it manually and place it under the path shown."
+echo ""
+echo "Run ./run.sh to start CRANE."

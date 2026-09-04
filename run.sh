@@ -13,22 +13,22 @@ MIRANDA_PORT=8003
 PARAKEET_PORT=8004
 TTS_PORT=8005
 
-# ── Model paths (best uncensored conversational + top small coder) ─────────
-# Miranda brain: Qwen2.5-3B-Instruct abliterated (uncensored, always-on, free)
-MIRANDA_MODEL="$VAULT/models/qwen-voice-agent/Qwen2.5-3B-Instruct-abliterated.Q4_K_M.gguf"
-# Fallback path if named differently
-if [ ! -f "$MIRANDA_MODEL" ]; then
-  MIRANDA_MODEL="$(find "$VAULT/models" -name "*3B*abliterated*.gguf" -o -name "*3b*abliterated*.gguf" 2>/dev/null | head -1)"
-fi
+# ── Model paths (confirmed live inventory in NOBILITY_VAULT, 35.7GB / 7 models) ─
+# Miranda brain: Qwen 2.5 3B abliterated, 1.8GB — models/qwen-voice-agent/
+MIRANDA_MODEL="$(find "$VAULT/models/qwen-voice-agent" -iname "*.gguf" 2>/dev/null | head -1)"
 
-# Coding model: Qwen2.5-Coder-7B (best small coder, on burst port 8001)
-CODER_MODEL="$VAULT/models/qwen-coder/Qwen2.5-Coder-7B-Instruct.Q4_K_M.gguf"
-if [ ! -f "$CODER_MODEL" ]; then
-  CODER_MODEL="$(find "$VAULT/models" -name "*Coder*7B*.gguf" -o -name "*coder*7b*.gguf" 2>/dev/null | head -1)"
-fi
+# Coding model: qwen-coder-1.5b-local, 1.1GB — already on disk, no download needed
+CODER_MODEL="$(find "$VAULT/models/qwen-coder-1.5b-local" -iname "*.gguf" 2>/dev/null | head -1)"
 
-# Parakeet ASR: 110M TDT CTC (speech-to-text, Phase 2)
-PARAKEET_MODEL="$VAULT/models/parakeet-110m/tdt_ctc-110m-q8_0.gguf"
+# Parakeet ASR: 110M, 170MB (Phase 2) — models/parakeet-110m/
+PARAKEET_MODEL="$(find "$VAULT/models/parakeet-110m" -iname "*.gguf" 2>/dev/null | head -1)"
+
+# TTS: VibeVoice 1.5B, 5.1GB, spec'd primary (Phase 2) — models/vibevoice-1.5b/
+TTS_MODEL="$(find "$VAULT/models/vibevoice-1.5b" -iname "*.gguf" -o -iname "*.safetensors" -o -iname "*.bin" 2>/dev/null | head -1)"
+# Fallback TTS: kokoro-82m, 313MB — models/kokoro-82m/
+if [ -z "$TTS_MODEL" ]; then
+  TTS_MODEL="$(find "$VAULT/models/kokoro-82m" -iname "*.gguf" -o -iname "*.safetensors" -o -iname "*.bin" 2>/dev/null | head -1)"
+fi
 
 # llama-server binary (from llama.cpp)
 LLAMA_SERVER="${LLAMA_SERVER:-$(command -v llama-server 2>/dev/null || echo "$VAULT/bin/llama-server")}"
@@ -50,9 +50,10 @@ mkdir -p "$CRANE_HOME/.crane" "$CRANE_HOME/.miranda"
 
 # ── Miranda 3B voice brain (port 8003) ───────────────────────────────────────
 start_miranda() {
-  if [ ! -f "$MIRANDA_MODEL" ]; then
-    echo "⚠  Miranda model not found at $MIRANDA_MODEL"
-    echo "   Run: bash scripts/download-models.sh to pull Qwen2.5-3B-abliterated"
+  if [ -z "$MIRANDA_MODEL" ] || [ ! -f "$MIRANDA_MODEL" ]; then
+    echo "⚠  No .gguf found under $VAULT/models/qwen-voice-agent/"
+    echo "   You have 1.8GB there but it may not be GGUF format (check with:"
+    echo "   ls -la $VAULT/models/qwen-voice-agent/)"
     return 1
   fi
   if [ ! -x "$LLAMA_SERVER" ]; then
