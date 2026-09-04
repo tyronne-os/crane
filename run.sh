@@ -98,7 +98,7 @@ echo "CRANE_HOME: $CRANE_HOME"
 echo "VAULT:      $VAULT"
 echo ""
 
-start_miranda
+start_miranda || echo "  Miranda will be available once model is downloaded (scripts/download-models.sh)"
 start_backend
 
 sleep 2
