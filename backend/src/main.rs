@@ -6,7 +6,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -17,7 +16,7 @@ pub struct Project {
     pub language: String,
     pub path: String,
     pub containerized: bool,
-    pub container_runtime: String,
+    pub container_runtime: String, // Always "podman"
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,7 +34,6 @@ pub struct CreateProjectRequest {
     pub name: String,
     pub language: String,
     pub containerized: Option<bool>,
-    pub container_runtime: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,15 +58,18 @@ async fn create_project(
 ) -> (StatusCode, Json<ApiResponse<Project>>) {
     let project_path = format!("/mnt/NOBILITY_VAULT/projects/{}", req.name);
     let containerized = req.containerized.unwrap_or(false);
-    let container_runtime = req.container_runtime.unwrap_or_else(|| {
-        if Command::new("podman").arg("--version").status().is_ok() {
-            "podman".to_string()
-        } else if Command::new("docker").arg("--version").status().is_ok() {
-            "docker".to_string()
-        } else {
-            "none".to_string()
-        }
-    });
+    let podman_available = Command::new("podman").arg("--version").status().is_ok();
+
+    if containerized && !podman_available {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Podman not found. Install with: sudo apt install podman".to_string()),
+            }),
+        );
+    }
 
     if let Err(e) = fs::create_dir_all(&project_path) {
         return (
@@ -81,10 +82,12 @@ async fn create_project(
         );
     }
 
+    // Initialize Rust project
     let status = Command::new("cargo")
         .arg("init")
         .arg("--name")
         .arg(&req.name)
+        .arg(".")
         .current_dir(&project_path)
         .status();
 
@@ -99,10 +102,8 @@ async fn create_project(
         );
     }
 
-    let _ = Command::new("git")
-        .arg("init")
-        .current_dir(&project_path)
-        .status();
+    // Initialize git
+    let _ = Command::new("git").arg("init").current_dir(&project_path).status();
     let _ = Command::new("git")
         .arg("config")
         .arg("user.name")
@@ -112,23 +113,26 @@ async fn create_project(
     let _ = Command::new("git")
         .arg("config")
         .arg("user.email")
-        .arg("kiro@local")
+        .arg("crane@local")
         .current_dir(&project_path)
         .status();
 
-    if containerized && container_runtime != "none" {
-        let runtime_cmd = if container_runtime == "podman" { "podman" } else { "docker" };
-        let mut cmd = Command::new(runtime_cmd);
+    // Create UV venv (local or containerized)
+    if containerized {
+        // Run inside Podman container (rootless)
+        let mut cmd = Command::new("podman");
         cmd.arg("run")
             .arg("--rm")
+            .arg("--userns=keep-id")
             .arg("-v")
             .arg(format!("{}:/workspace", project_path))
             .arg("python:3.11-slim")
             .arg("bash")
             .arg("-c")
-            .arg("cd /workspace && pip install uv && uv venv .venv && uv sync");
+            .arg("cd /workspace && pip install -q uv && uv venv .venv && uv sync");
         let _ = cmd.status();
     } else {
+        // Local venv with UV
         let _ = Command::new("uv")
             .arg("venv")
             .arg(".venv")
@@ -140,6 +144,7 @@ async fn create_project(
             .status();
     }
 
+    // Auto-commit
     let _ = Command::new("git")
         .arg("add")
         .arg("-A")
@@ -154,10 +159,10 @@ async fn create_project(
 
     let project = Project {
         name: req.name.clone(),
-        language: req.language,
+        language: "rust".to_string(),
         path: project_path,
         containerized,
-        container_runtime,
+        container_runtime: "podman".to_string(),
     };
 
     let mut projects = state.projects.lock().await;
@@ -175,23 +180,14 @@ async fn create_project(
 
 async fn health() -> Json<ApiResponse<String>> {
     let podman_ok = Command::new("podman").arg("--version").status().is_ok();
-    let docker_ok = Command::new("docker").arg("--version").status().is_ok();
     let uv_ok = Command::new("uv").arg("--version").status().is_ok();
     let cargo_ok = Command::new("cargo").arg("--version").status().is_ok();
-
-    let runtime = if podman_ok {
-        "podman (primary)"
-    } else if docker_ok {
-        "docker (fallback)"
-    } else {
-        "none"
-    };
 
     Json(ApiResponse {
         success: true,
         data: Some(format!(
-            "Runtime: {}, UV: {}, Cargo: {}",
-            runtime,
+            "Podman: {}, UV: {}, Cargo: {}",
+            if podman_ok { "ok" } else { "not installed" },
             if uv_ok { "ok" } else { "missing" },
             if cargo_ok { "ok" } else { "missing" }
         )),
@@ -218,10 +214,13 @@ async fn main() {
         .await
         .expect("Failed to bind to 127.0.0.1:8002");
 
-    println!("🏗️  Crane Backend listening on http://127.0.0.1:8002");
+    println!("🏗️  CRANE Backend listening on http://127.0.0.1:8002");
+    println!("   Container runtime: Podman (rootless, safer)");
+    println!("   Projects: /mnt/NOBILITY_VAULT/projects/");
+    println!("");
     println!("   GET  /api/health");
     println!("   GET  /api/projects");
-    println!("   POST /api/projects/create");
+    println!("   POST /api/projects/create (with optional containerized: true)");
 
     axum::serve(listener, app).await.unwrap();
 }

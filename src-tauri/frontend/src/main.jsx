@@ -7,7 +7,6 @@ function App() {
   const [projects, setProjects] = useState([]);
   const [newProjectName, setNewProjectName] = useState('');
   const [containerized, setContainerized] = useState(false);
-  const [containerRuntime, setContainerRuntime] = useState('podman');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -35,8 +34,7 @@ function App() {
         body: JSON.stringify({
           name: newProjectName,
           language: 'rust',
-          containerized,
-          container_runtime: containerRuntime
+          containerized
         })
       });
       
@@ -46,6 +44,8 @@ function App() {
         setNewProjectName('');
         setContainerized(false);
         setView('splash');
+      } else {
+        alert('Error: ' + (data.error || 'Unknown error'));
       }
     } catch (err) {
       alert('Failed to create project: ' + err.message);
@@ -69,6 +69,7 @@ function App() {
         <>
           <div style={{ fontSize: '80px', marginBottom: '20px', filter: 'drop-shadow(0 0 10px rgba(59, 130, 246, 0.5))' }}>🏗️</div>
           <h1 style={{ fontSize: '32px', marginBottom: '30px', fontWeight: '700' }}>CRANE</h1>
+          <p style={{ color: '#94a3b8', marginBottom: '30px' }}>Spec-driven Rust + Python with Podman</p>
           
           {projects.length > 0 && (
             <div style={{ marginBottom: '30px', textAlign: 'center' }}>
@@ -89,7 +90,7 @@ function App() {
                   onClick={() => alert('Opening: ' + p.name)}>
                     <span style={{ fontWeight: '600' }}>{p.name}</span>
                     <span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: '10px' }}>
-                      [{p.language}] {p.containerized ? `📦 ${p.container_runtime}` : '💻 local'}
+                      [{p.language}] {p.containerized ? '📦 podman' : '💻 local'}
                     </span>
                   </li>
                 ))}
@@ -120,7 +121,7 @@ function App() {
         </>
       ) : (
         <>
-          <h2 style={{ marginBottom: '30px' }}>Create New Project</h2>
+          <h2 style={{ marginBottom: '30px' }}>Create New Rust Project</h2>
           
           <input
             type="text"
@@ -152,33 +153,9 @@ function App() {
               disabled={loading}
             />
             <label htmlFor="containerized" style={{ cursor: 'pointer', fontSize: '14px' }}>
-              📦 Containerized (Podman/Docker)
+              📦 Run in Podman container (rootless, safer)
             </label>
           </div>
-          
-          {containerized && (
-            <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <label htmlFor="runtime" style={{ fontSize: '14px' }}>Container runtime:</label>
-              <select
-                id="runtime"
-                value={containerRuntime}
-                onChange={(e) => setContainerRuntime(e.target.value)}
-                disabled={loading}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  border: '1px solid rgba(148, 163, 184, 0.3)',
-                  background: 'rgba(148, 163, 184, 0.1)',
-                  color: '#e2e8f0',
-                  fontSize: '14px',
-                  cursor: 'pointer'
-                }}
-              >
-                <option value="podman">🔒 Podman (safer, rootless)</option>
-                <option value="docker">🐳 Docker (fallback)</option>
-              </select>
-            </div>
-          )}
           
           <div style={{ display: 'flex', gap: '12px' }}>
             <button 

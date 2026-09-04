@@ -7,7 +7,7 @@
 - ✅ Splash screen: Recent projects or Create New
 - ✅ Auto venv with UV (fast Python package manager)
 - ✅ Default: Rust + Python (with UV)
-- ✅ Containerized with Podman (safer, rootless) or Docker
+- ✅ Containerized with Podman (safer, rootless) or other runtimes
 - ✅ No npm unless cloning projects
 - ✅ Full file system access to `/mnt/NOBILITY_VAULT/`
 - ✅ Auto git init on every project
@@ -28,8 +28,8 @@ pip install uv
 # Install Podman (safer than Docker)
 sudo apt install podman
 
-# Optional: Docker (fallback)
-sudo apt install docker.io
+# Optional: Podman
+sudo apt install podman
 ```
 
 ### 2. Build & Run
@@ -93,7 +93,7 @@ Project name: ___________
 
 When checked, select runtime:
   🔒 Podman (safer, rootless) — DEFAULT
-  🐳 Docker (fallback)
+  🐳 Podman
 
 [✅ Create] [Cancel]
 ```
@@ -121,7 +121,7 @@ When checked, select runtime:
 
 **Auto-detects:**
 - Podman (preferred) → rootless, safer
-- Docker (fallback) → if Podman not found
+- Podman → if Podman not found
 - UV → for venv management
 
 ### Frontend (React, Tauri)
