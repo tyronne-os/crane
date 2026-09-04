@@ -1,2 +1,0 @@
-fn(State<AppState>, Json<CreateProjectRequest>) -> impl Future<Output = (axum::http::StatusCode, Json<ApiResponse<Project>>)> {create_project}
-fn(State<AppState>, Json<CreateProjectRequest>) -> impl Future<Output = (axum::http::StatusCode, Json<ApiResponse<Project>>)> {create_project}: Handler<_, _>
