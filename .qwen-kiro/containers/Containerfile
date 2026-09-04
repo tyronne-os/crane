@@ -1,0 +1,17 @@
+FROM rust:latest
+
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-venv \
+    git
+
+# Install UV for fast Python env management
+RUN pip install --no-cache-dir uv
+
+COPY . .
+
+EXPOSE 8000 8001 8002
+
+CMD ["bash"]
