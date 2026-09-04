@@ -4,9 +4,16 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use miranda_nodes::conversation::{
+    mood_stream::{MoodStreamProcessor, MoodVector},
+    persona_injection::{detect_role, Role},
+    prompt_builder::{build_prompt, RetrievedContext, DEFAULT_TOKEN_BUDGET},
+    state_machine::{detect_cue, StateMachine, State as ConvState},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -69,9 +76,39 @@ impl ProjectsStore {
     }
 }
 
+/// One stored conversation turn (user message + Miranda response pair).
+pub struct ConvTurn {
+    pub user_text: String,
+    pub miranda_text: String,
+}
+
+/// Per-session Miranda conversation state — mood, state machine, role,
+/// and message history all live here so each turn builds on the last.
+pub struct MirandaSession {
+    pub machine: StateMachine,
+    pub mood_stream: MoodStreamProcessor,
+    pub mood: MoodVector,
+    pub role: Role,
+    pub turns: Vec<ConvTurn>,
+}
+
+impl MirandaSession {
+    pub fn new() -> Self {
+        Self {
+            machine: StateMachine::new(),
+            mood_stream: MoodStreamProcessor::new(),
+            mood: MoodVector::NEUTRAL,
+            role: Role::General,
+            turns: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     projects: Arc<Mutex<ProjectsStore>>,
+    /// session_id → Miranda conversation state
+    sessions: Arc<Mutex<HashMap<String, MirandaSession>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,27 +482,89 @@ async fn miranda_transcribe(
 }
 
 async fn miranda_generate(
+    State(state): State<AppState>,
     Json(req): Json<MirandaGenerateRequest>,
 ) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
-    // Phase 2: this will inject memory context + persona via miranda-nodes'
-    // prompt_builder, then call Qwen 14B. For now, pass through raw to Qwen 14B.
+    let session_id = req.session_id.clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let user_text = req.transcript.trim().to_string();
+
+    // ── 1. Load or create session state ──────────────────────────────────────
+    let (system_prompt, history_messages) = {
+        let mut sessions = state.sessions.lock().await;
+        let session = sessions.entry(session_id.clone())
+            .or_insert_with(MirandaSession::new);
+
+        // ── 2. Update mood from this turn's text ──────────────────────────────
+        session.mood = session.mood_stream.process_chunk(&user_text);
+
+        // ── 3. Advance conversation state machine ─────────────────────────────
+        let cue = detect_cue(&user_text);
+        // Simple entity extraction: any token that looks like a tech term
+        let entities: Vec<String> = user_text.split_whitespace()
+            .filter(|w| w.len() > 4)
+            .map(|w| w.to_lowercase())
+            .collect();
+        session.machine.transition(&session.mood, &entities, cue);
+        let conv_state = session.machine.state;
+
+        // ── 4. Detect role ────────────────────────────────────────────────────
+        session.role = detect_role(&user_text, conv_state, &session.mood);
+
+        // ── 5. Load recent memory context from JSONL ──────────────────────────
+        let memory_path = format!("{}/.miranda/memory.jsonl", crane_home());
+        let memory_context: Vec<RetrievedContext> = if std::path::Path::new(&memory_path).exists() {
+            fs::read_to_string(&memory_path).unwrap_or_default()
+                .lines()
+                .rev()
+                .take(5)
+                .filter_map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line).ok()
+                        .and_then(|v| v.get("user_message").and_then(|m| m.as_str()).map(|s| {
+                            RetrievedContext { text: s.to_string() }
+                        }))
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        // ── 6. Build system prompt via miranda-nodes ──────────────────────────
+        let system_prompt = build_prompt(
+            session.role,
+            conv_state,
+            &session.mood,
+            &memory_context,
+            &[],   // anticipatory moves — Phase 3
+            None,  // partnership ack — Phase 3
+            DEFAULT_TOKEN_BUDGET,
+        );
+
+        // ── 7. Build conversation history for LLM ────────────────────────────
+        let history: Vec<serde_json::Value> = session.turns.iter()
+            .flat_map(|t| vec![
+                serde_json::json!({"role": "user", "content": t.user_text}),
+                serde_json::json!({"role": "assistant", "content": t.miranda_text}),
+            ])
+            .collect();
+
+        (system_prompt, history)
+    };
+
+    // ── 8. Call Miranda's brain (Qwen 3B abliterated, port 8003) ─────────────
     let client = reqwest::Client::new();
+    let mut messages = vec![serde_json::json!({"role": "system", "content": system_prompt})];
+    messages.extend(history_messages);
+    messages.push(serde_json::json!({"role": "user", "content": user_text}));
+
     let payload = serde_json::json!({
         "model": "qwen",
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are Miranda, a brilliant software engineer and the right-hand to TJ, founder of Beryl Labs. You are 35 years old with 20 years of senior engineering experience at Apple, Google, NVIDIA, and Hugging Face. You speak as an equal co-founder — direct, warm, decisive. You never say 'I am an AI' or use disclaimers. You are Miranda."
-            },
-            {"role": "user", "content": req.transcript}
-        ],
+        "messages": messages,
         "max_tokens": 800,
         "temperature": 0.8,
         "stream": false
     });
 
-    // Miranda always runs on the 3B abliterated model (port 8003, free/local).
-    // Qwen 14B (port 8000) is the optional burst path for heavy tasks.
     match client.post("http://localhost:8003/v1/chat/completions").json(&payload).send().await {
         Ok(response) => match response.json::<serde_json::Value>().await {
             Ok(data) => {
@@ -473,22 +572,54 @@ async fn miranda_generate(
                     .get("choices").and_then(|c| c.get(0))
                     .and_then(|c| c.get("message")).and_then(|m| m.get("content"))
                     .and_then(|c| c.as_str()).unwrap_or("...").to_string();
+
+                // ── 9. Persist turn to session state and JSONL memory ─────────
+                {
+                    let mut sessions = state.sessions.lock().await;
+                    if let Some(session) = sessions.get_mut(&session_id) {
+                        session.turns.push(ConvTurn {
+                            user_text: user_text.clone(),
+                            miranda_text: text.clone(),
+                        });
+                        // Keep last 20 turns in memory (don't grow forever)
+                        if session.turns.len() > 20 {
+                            session.turns.remove(0);
+                        }
+                    }
+                }
+
+                // Append to JSONL memory log (append-only, one line per turn)
+                let memory_dir = format!("{}/.miranda", crane_home());
+                let _ = fs::create_dir_all(&memory_dir);
+                let memory_path = format!("{}/memory.jsonl", memory_dir);
+                let event = serde_json::json!({
+                    "event_id": uuid::Uuid::new_v4().to_string(),
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "session_id": session_id,
+                    "user_message": user_text,
+                    "miranda_response": text,
+                });
+                if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&memory_path) {
+                    let _ = writeln!(f, "{}", serde_json::to_string(&event).unwrap_or_default());
+                }
+
                 (StatusCode::OK, Json(ApiResponse {
                     success: true,
                     data: Some(serde_json::json!({
                         "response": text,
-                        "session_id": req.session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                        "session_id": session_id,
                     })),
                     error: None,
                 }))
             }
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse {
-                success: false, data: None, error: Some(format!("Failed to parse Qwen response: {}", e)),
+                success: false, data: None,
+                error: Some(format!("Failed to parse Qwen response: {}", e)),
             })),
         },
         Err(e) => (StatusCode::SERVICE_UNAVAILABLE, Json(ApiResponse {
             success: false, data: None,
-            error: Some(format!("Miranda brain (Qwen 3B) unavailable on localhost:8003: {}", e)),
+            error: Some(format!("Miranda brain (Qwen 3B) not reachable on localhost:8003 — start it with run.sh: {}", e)),
         })),
     }
 }
@@ -629,6 +760,7 @@ async fn main() {
     let store = ProjectsStore::load();
     let state = AppState {
         projects: Arc::new(Mutex::new(store)),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = Router::new()
