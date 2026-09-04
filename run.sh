@@ -52,12 +52,22 @@ mkdir -p "$CRANE_HOME/.crane" "$CRANE_HOME/.miranda"
 start_miranda() {
   if [ -z "$MIRANDA_MODEL" ] || [ ! -f "$MIRANDA_MODEL" ]; then
     echo "⚠  No .gguf found under $VAULT/models/qwen-voice-agent/"
-    echo "   You have 1.8GB there but it may not be GGUF format (check with:"
-    echo "   ls -la $VAULT/models/qwen-voice-agent/)"
+    echo "   Files there: $(ls "$VAULT/models/qwen-voice-agent/" 2>/dev/null | tr '\n' ' ' || echo '(none)')"
+    echo ""
+    echo "   If your model is not GGUF format, download the GGUF version (1.8GB):"
+    echo "   cd $VAULT/models/qwen-voice-agent && \\"
+    echo "   wget 'https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf'"
+    echo ""
+    echo "   Or run: scripts/install-inference.sh  (handles model + llama-server)"
     return 1
   fi
   if [ ! -x "$LLAMA_SERVER" ]; then
-    echo "⚠  llama-server not found. Install llama.cpp or set LLAMA_SERVER= path."
+    echo "⚠  llama-server not found."
+    echo "   Fix: run scripts/install-inference.sh (builds llama.cpp with CUDA)"
+    echo "   Or:  export LLAMA_SERVER=/path/to/your/llama-server"
+    echo ""
+    echo "   ➜  Miranda will use browser SpeechRecognition/Synthesis as fallback."
+    echo "      You can still talk to Miranda via the app — just without local LLM."
     return 1
   fi
   echo "Starting Miranda (Qwen2.5-3B abliterated) on port $MIRANDA_PORT..."
