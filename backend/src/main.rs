@@ -1,10 +1,11 @@
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
 use std::sync::Arc;
@@ -16,7 +17,7 @@ pub struct Project {
     pub language: String,
     pub path: String,
     pub containerized: bool,
-    pub container_runtime: String, // Always "podman"
+    pub container_runtime: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,12 +37,28 @@ pub struct CreateProjectRequest {
     pub containerized: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WriteFileRequest {
+    pub project: String,
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QwenGenerateRequest {
+    pub prompt: String,
+    pub model: Option<String>,
+    pub max_tokens: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
 }
+
+// ===== Project Management =====
 
 async fn list_projects(State(state): State<AppState>) -> Json<ApiResponse<Vec<Project>>> {
     let projects = state.projects.lock().await;
@@ -82,7 +99,6 @@ async fn create_project(
         );
     }
 
-    // Initialize Rust project
     let status = Command::new("cargo")
         .arg("init")
         .arg("--name")
@@ -102,7 +118,6 @@ async fn create_project(
         );
     }
 
-    // Initialize git
     let _ = Command::new("git").arg("init").current_dir(&project_path).status();
     let _ = Command::new("git")
         .arg("config")
@@ -117,9 +132,7 @@ async fn create_project(
         .current_dir(&project_path)
         .status();
 
-    // Create UV venv (local or containerized)
     if containerized {
-        // Run inside Podman container (rootless)
         let mut cmd = Command::new("podman");
         cmd.arg("run")
             .arg("--rm")
@@ -132,7 +145,6 @@ async fn create_project(
             .arg("cd /workspace && pip install -q uv && uv venv .venv && uv sync");
         let _ = cmd.status();
     } else {
-        // Local venv with UV
         let _ = Command::new("uv")
             .arg("venv")
             .arg(".venv")
@@ -144,7 +156,6 @@ async fn create_project(
             .status();
     }
 
-    // Auto-commit
     let _ = Command::new("git")
         .arg("add")
         .arg("-A")
@@ -182,17 +193,282 @@ async fn health() -> Json<ApiResponse<String>> {
     let podman_ok = Command::new("podman").arg("--version").status().is_ok();
     let uv_ok = Command::new("uv").arg("--version").status().is_ok();
     let cargo_ok = Command::new("cargo").arg("--version").status().is_ok();
+    let qwen_14b = match reqwest::Client::new()
+        .get("http://localhost:8000/v1/models")
+        .send()
+        .await
+    {
+        Ok(r) => r.status().is_success(),
+        Err(_) => false,
+    };
+    let qwen_coder = match reqwest::Client::new()
+        .get("http://localhost:8001/v1/models")
+        .send()
+        .await
+    {
+        Ok(r) => r.status().is_success(),
+        Err(_) => false,
+    };
 
     Json(ApiResponse {
         success: true,
         data: Some(format!(
-            "Podman: {}, UV: {}, Cargo: {}",
-            if podman_ok { "ok" } else { "not installed" },
+            "Podman: {}, UV: {}, Cargo: {}, Qwen 14B: {}, Qwen Coder: {}",
+            if podman_ok { "ok" } else { "offline" },
             if uv_ok { "ok" } else { "missing" },
-            if cargo_ok { "ok" } else { "missing" }
+            if cargo_ok { "ok" } else { "missing" },
+            if qwen_14b { "online" } else { "offline" },
+            if qwen_coder { "online" } else { "offline" }
         )),
         error: None,
     })
+}
+
+// ===== File Management =====
+
+async fn get_file_tree(
+    Query(params): Query<HashMap<String, String>>,
+) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let project = match params.get("project") {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some("Missing project parameter".to_string()),
+                }),
+            )
+        }
+    };
+
+    let project_path = format!("/mnt/NOBILITY_VAULT/projects/{}", project);
+
+    fn build_tree(path: &std::path::Path, depth: usize) -> serde_json::Value {
+        if depth > 5 {
+            return serde_json::json!([]);
+        }
+
+        let mut items = vec![];
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                if let Ok(metadata) = entry.metadata() {
+                    let file_name = entry.file_name();
+                    let name = file_name.to_string_lossy().to_string();
+
+                    if name.starts_with('.') {
+                        continue;
+                    }
+
+                    let path_str = entry.path().to_string_lossy().to_string();
+                    let relative_path = path_str
+                        .strip_prefix(path.to_string_lossy().as_ref())
+                        .unwrap_or(&path_str)
+                        .trim_start_matches('/');
+
+                    if metadata.is_file() {
+                        items.push(serde_json::json!({
+                            "name": name,
+                            "type": "file",
+                            "path": relative_path
+                        }));
+                    } else if metadata.is_dir() {
+                        let children = build_tree(&entry.path(), depth + 1);
+                        items.push(serde_json::json!({
+                            "name": name,
+                            "type": "dir",
+                            "path": relative_path,
+                            "children": children
+                        }));
+                    }
+                }
+            }
+        }
+        serde_json::json!(items)
+    }
+
+    let tree = build_tree(std::path::Path::new(&project_path), 0);
+    (
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            data: Some(serde_json::json!({ "tree": tree })),
+            error: None,
+        }),
+    )
+}
+
+async fn read_file(
+    Query(params): Query<HashMap<String, String>>,
+) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let project = match params.get("project") {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some("Missing project parameter".to_string()),
+                }),
+            )
+        }
+    };
+
+    let file_path = match params.get("path") {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some("Missing path parameter".to_string()),
+                }),
+            )
+        }
+    };
+
+    let full_path = format!("/mnt/NOBILITY_VAULT/projects/{}/{}", project, file_path);
+    match fs::read_to_string(&full_path) {
+        Ok(content) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(serde_json::json!({
+                    "path": file_path,
+                    "content": content
+                })),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("File not found: {}", e)),
+            }),
+        ),
+    }
+}
+
+async fn write_file(
+    Json(req): Json<WriteFileRequest>,
+) -> (StatusCode, Json<ApiResponse<String>>) {
+    let full_path = format!("/mnt/NOBILITY_VAULT/projects/{}/{}", req.project, req.path);
+
+    if let Some(parent) = std::path::Path::new(&full_path).parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to create directory: {}", e)),
+                }),
+            );
+        }
+    }
+
+    match fs::write(&full_path, &req.content) {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some("File saved".to_string()),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to write file: {}", e)),
+            }),
+        ),
+    }
+}
+
+// ===== Qwen LLM Routing =====
+
+async fn qwen_generate(
+    Json(req): Json<QwenGenerateRequest>,
+) -> (StatusCode, Json<ApiResponse<serde_json::Value>>) {
+    let model = req.model.unwrap_or_else(|| "qwen-14b".to_string());
+    let max_tokens = req.max_tokens.unwrap_or(1000);
+
+    let url = match model.as_str() {
+        "qwen-14b" => "http://localhost:8000/v1/chat/completions",
+        "qwen-coder" => "http://localhost:8001/v1/chat/completions",
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some("Unknown model. Use 'qwen-14b' or 'qwen-coder'".to_string()),
+                }),
+            )
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let payload = serde_json::json!({
+        "model": "qwen",
+        "messages": [{"role": "user", "content": req.prompt}],
+        "max_tokens": max_tokens,
+        "temperature": 0.7
+    });
+
+    match client.post(url).json(&payload).send().await {
+        Ok(response) => match response.json::<serde_json::Value>().await {
+            Ok(data) => {
+                let text = data
+                    .get("choices")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c| c.get("message"))
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("No response")
+                    .to_string();
+
+                (
+                    StatusCode::OK,
+                    Json(ApiResponse {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "text": text,
+                            "model": model,
+                            "tokens": max_tokens
+                        })),
+                        error: None,
+                    }),
+                )
+            }
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to parse Qwen response: {}", e)),
+                }),
+            ),
+        },
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!(
+                    "Qwen models unavailable: {}. Ensure models are running on localhost:8000 and localhost:8001",
+                    e
+                )),
+            }),
+        ),
+    }
 }
 
 #[tokio::main]
@@ -207,6 +483,10 @@ async fn main() {
         .route("/api/health", get(health))
         .route("/api/projects", get(list_projects))
         .route("/api/projects/create", post(create_project))
+        .route("/api/files/tree", get(get_file_tree))
+        .route("/api/files/read", get(read_file))
+        .route("/api/files/write", post(write_file))
+        .route("/api/qwen/generate", post(qwen_generate))
         .with_state(state)
         .layer(tower_http::cors::CorsLayer::permissive());
 
@@ -214,13 +494,23 @@ async fn main() {
         .await
         .expect("Failed to bind to 127.0.0.1:8002");
 
-    println!("🏗️  CRANE Backend listening on http://127.0.0.1:8002");
-    println!("   Container runtime: Podman (rootless, safer)");
-    println!("   Projects: /mnt/NOBILITY_VAULT/projects/");
+    println!("🏗️  CRANE Backend v1.1 — Fully Wired");
+    println!("════════════════════════════════════════");
+    println!("   Container: Podman (rootless, safer)");
+    println!("   Projects:  /mnt/NOBILITY_VAULT/projects/");
+    println!("   Qwen 14B:  http://localhost:8000/v1");
+    println!("   Qwen Coder: http://localhost:8001/v1");
     println!("");
-    println!("   GET  /api/health");
-    println!("   GET  /api/projects");
-    println!("   POST /api/projects/create (with optional containerized: true)");
+    println!("   Endpoints:");
+    println!("   • GET  /api/health");
+    println!("   • GET  /api/projects");
+    println!("   • POST /api/projects/create");
+    println!("   • GET  /api/files/tree");
+    println!("   • GET  /api/files/read");
+    println!("   • POST /api/files/write");
+    println!("   • POST /api/qwen/generate (models: qwen-14b, qwen-coder)");
+    println!("");
+    println!("   Listening on http://127.0.0.1:8002");
 
     axum::serve(listener, app).await.unwrap();
 }
