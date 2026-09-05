@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import { FileEditor } from './FileEditor';
 import { ImagesPage } from './ImagesPage';
+import { VoiceStudio } from './VoiceStudio';
 import './index.css';
 
 const API = 'http://localhost:8002';
@@ -501,7 +502,7 @@ function App() {
   const [projects, setProjects] = useState([]);
   const [currentProject, setCurrentProject] = useState(null);
   const [showNewProject, setShowNewProject] = useState(false);
-  const [view, setView] = useState('code'); // 'code' | 'images'
+  const [view, setView] = useState('voice'); // 'code' | 'voice' | 'images'
   const [mirandaLastTranscript, setMirandaLastTranscript] = useState('');
 
   useEffect(() => {
@@ -537,9 +538,10 @@ function App() {
         padding: '0 12px', height: 40, background: '#0f172a',
         borderBottom: '1px solid #1e293b', flexShrink: 0,
       }}>
-        <span style={{ marginRight: 8, fontSize: 16 }}>🏗️</span>
-        <NavTab label="Code" active={view === 'code'} onClick={() => setView('code')} />
+        <span style={{ marginRight: 12, fontSize: 16, fontWeight: 700, color: '#a78bfa', letterSpacing: '0.08em' }}>CRANE</span>
+        <NavTab label="🎙️ Voice" active={view === 'voice'} onClick={() => setView('voice')} />
         <NavTab label="🎨 Images" active={view === 'images'} onClick={() => setView('images')} />
+        <NavTab label="Code" active={view === 'code'} onClick={() => setView('code')} />
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -556,7 +558,9 @@ function App() {
         )}
 
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          {view === 'images' ? (
+          {view === 'voice' ? (
+            <VoiceStudio />
+          ) : view === 'images' ? (
             <ImagesPage mirandaTranscript={mirandaLastTranscript} />
           ) : currentProject ? (
             <FileEditor projectName={currentProject} />
