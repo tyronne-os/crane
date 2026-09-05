@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import { FileEditor } from './FileEditor';
+import { ImagesPage } from './ImagesPage';
 import './index.css';
 
 const API = 'http://localhost:8002';
@@ -22,7 +23,7 @@ function parseCreateProject(text) {
   };
 }
 
-function MirandaVoicePanel({ isOpen, onToggle, onProjectCreated }) {
+function MirandaVoicePanel({ isOpen, onToggle, onProjectCreated, onTranscript }) {
   const [status, setStatus] = useState('idle'); // idle | listening | thinking | speaking
   const [transcript, setTranscript] = useState('');
   const [response, setResponse] = useState('');
@@ -181,6 +182,7 @@ function MirandaVoicePanel({ isOpen, onToggle, onProjectCreated }) {
   const sendToMiranda = async (text) => {
     if (!text?.trim()) { setStatus('idle'); return; }
     setStatus('thinking');
+    if (onTranscript) onTranscript(text);
 
     // ── Voice command detection (runs before LLM so Miranda can acknowledge) ──
     let commandContext = '';
@@ -349,7 +351,7 @@ function MirandaVoicePanel({ isOpen, onToggle, onProjectCreated }) {
 
 // ===== Left Sidebar =====
 
-function Sidebar({ projects, currentProject, onSelectProject, onNewProject, onProjectCreated }) {
+function Sidebar({ projects, currentProject, onSelectProject, onNewProject, onProjectCreated, onMirandaTranscript }) {
   const [mirandaOpen, setMirandaOpen] = useState(true);
 
   return (
@@ -396,7 +398,7 @@ function Sidebar({ projects, currentProject, onSelectProject, onNewProject, onPr
 
       {/* Miranda panel at the bottom */}
       <div style={{ padding: '8px', borderTop: '1px solid #334155' }}>
-        <MirandaVoicePanel isOpen={mirandaOpen} onToggle={() => setMirandaOpen(o => !o)} onProjectCreated={onProjectCreated} />
+        <MirandaVoicePanel isOpen={mirandaOpen} onToggle={() => setMirandaOpen(o => !o)} onProjectCreated={onProjectCreated} onTranscript={onMirandaTranscript} />
       </div>
     </div>
   );
@@ -499,6 +501,8 @@ function App() {
   const [projects, setProjects] = useState([]);
   const [currentProject, setCurrentProject] = useState(null);
   const [showNewProject, setShowNewProject] = useState(false);
+  const [view, setView] = useState('code'); // 'code' | 'images'
+  const [mirandaLastTranscript, setMirandaLastTranscript] = useState('');
 
   useEffect(() => {
     fetch(`${API}/api/projects`)
@@ -513,31 +517,70 @@ function App() {
     setShowNewProject(false);
   };
 
+  // If Miranda issues a generate-image command, auto-switch to Images view
+  const handleMirandaTranscript = (text) => {
+    setMirandaLastTranscript(text);
+    if (/\b(generate|draw|paint|render|make)\b.*\b(image|picture|art|photo)\b/i.test(text)) {
+      setView('images');
+    }
+  };
+
   return (
     <div style={{
-      display: 'flex', height: '100vh', overflow: 'hidden',
+      display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden',
       background: '#0f172a', color: '#e2e8f0',
       fontFamily: 'system-ui, -apple-system, monospace'
     }}>
-      <Sidebar
-        projects={projects}
-        currentProject={currentProject}
-        onSelectProject={setCurrentProject}
-        onNewProject={() => setShowNewProject(true)}
-        onProjectCreated={handleCreated}
-      />
+      {/* Top nav bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 4,
+        padding: '0 12px', height: 40, background: '#0f172a',
+        borderBottom: '1px solid #1e293b', flexShrink: 0,
+      }}>
+        <span style={{ marginRight: 8, fontSize: 16 }}>🏗️</span>
+        <NavTab label="Code" active={view === 'code'} onClick={() => setView('code')} />
+        <NavTab label="🎨 Images" active={view === 'images'} onClick={() => setView('images')} />
+      </div>
 
-      <div style={{ flex: 1, overflow: 'hidden' }}>
-        {currentProject
-          ? <FileEditor projectName={currentProject} />
-          : <Splash onNewProject={() => setShowNewProject(true)} />
-        }
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Sidebar — only shown in code view */}
+        {view === 'code' && (
+          <Sidebar
+            projects={projects}
+            currentProject={currentProject}
+            onSelectProject={setCurrentProject}
+            onNewProject={() => setShowNewProject(true)}
+            onProjectCreated={handleCreated}
+            onMirandaTranscript={handleMirandaTranscript}
+          />
+        )}
+
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {view === 'images' ? (
+            <ImagesPage mirandaTranscript={mirandaLastTranscript} />
+          ) : currentProject ? (
+            <FileEditor projectName={currentProject} />
+          ) : (
+            <Splash onNewProject={() => setShowNewProject(true)} />
+          )}
+        </div>
       </div>
 
       {showNewProject && (
         <NewProjectModal onClose={() => setShowNewProject(false)} onCreated={handleCreated} />
       )}
     </div>
+  );
+}
+
+function NavTab({ label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      background: 'none', border: 'none', color: active ? '#e2e8f0' : '#64748b',
+      fontSize: 13, fontWeight: active ? 600 : 400, padding: '0 12px', height: '100%',
+      cursor: 'pointer', borderBottom: active ? '2px solid #a78bfa' : '2px solid transparent',
+      transition: 'color 0.15s',
+    }}>{label}</button>
   );
 }
 

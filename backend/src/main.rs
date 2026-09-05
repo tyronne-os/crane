@@ -847,6 +847,198 @@ async fn create_hf_repo(
     }
 }
 
+// ===== Image Generation Routes (AUTOMATIC1111 port 7860) ======================
+
+const A1111_URL: &str = "http://127.0.0.1:7860";
+
+#[derive(Debug, Deserialize)]
+struct ImageGenerateRequest {
+    prompt: String,
+    #[serde(default)]
+    negative_prompt: String,
+    #[serde(default = "default_steps")]
+    steps: u32,
+    #[serde(default = "default_cfg")]
+    cfg_scale: f32,
+    #[serde(default = "default_width")]
+    width: u32,
+    #[serde(default = "default_height")]
+    height: u32,
+    #[serde(default)]
+    model: String,
+    #[serde(default = "default_sampler")]
+    sampler_name: String,
+    #[serde(default = "default_batch")]
+    batch_size: u32,
+}
+
+fn default_steps() -> u32 { 20 }
+fn default_cfg() -> f32 { 7.0 }
+fn default_width() -> u32 { 512 }
+fn default_height() -> u32 { 512 }
+fn default_sampler() -> String { "DPM++ 2M Karras".to_string() }
+fn default_batch() -> u32 { 1 }
+
+#[derive(Debug, Serialize)]
+struct ImageGenerateResponse {
+    images: Vec<String>, // base64 PNG strings
+    prompt: String,
+    model: String,
+    timestamp: u64,
+}
+
+async fn images_generate(
+    State(state): State<AppState>,
+    Json(req): Json<ImageGenerateRequest>,
+) -> Result<Json<ApiResponse<ImageGenerateResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let client = reqwest::Client::new();
+
+    // If a specific model was requested, switch A1111 to it first
+    if !req.model.is_empty() {
+        let _ = client
+            .post(format!("{}/sdapi/v1/options", A1111_URL))
+            .json(&serde_json::json!({ "sd_model_checkpoint": req.model }))
+            .send()
+            .await;
+    }
+
+    let payload = serde_json::json!({
+        "prompt": req.prompt,
+        "negative_prompt": req.negative_prompt,
+        "steps": req.steps,
+        "cfg_scale": req.cfg_scale,
+        "width": req.width,
+        "height": req.height,
+        "sampler_name": req.sampler_name,
+        "batch_size": req.batch_size,
+    });
+
+    let resp = client
+        .post(format!("{}/sdapi/v1/txt2img", A1111_URL))
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(180))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+            let images: Vec<String> = body["images"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+
+            // Persist to image history JSONL
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let history_path = format!("{}/.crane/image_history.jsonl", crane_home());
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true).append(true).open(&history_path)
+            {
+                let entry = serde_json::json!({
+                    "ts": ts,
+                    "prompt": req.prompt,
+                    "negative_prompt": req.negative_prompt,
+                    "model": req.model,
+                    "steps": req.steps,
+                    "cfg_scale": req.cfg_scale,
+                    "width": req.width,
+                    "height": req.height,
+                    "image_count": images.len(),
+                });
+                let _ = writeln!(f, "{}", entry);
+            }
+
+            Ok(Json(ApiResponse {
+                success: true,
+                data: Some(ImageGenerateResponse {
+                    images,
+                    prompt: req.prompt,
+                    model: req.model,
+                    timestamp: ts,
+                }),
+                error: None,
+            }))
+        }
+        Ok(r) => {
+            let status = r.status();
+            let msg = r.text().await.unwrap_or_else(|_| "unknown error".into());
+            Err((
+                StatusCode::BAD_GATEWAY,
+                Json(ApiResponse { success: false, data: None,
+                    error: Some(format!("A1111 returned {}: {}", status, msg)) }),
+            ))
+        }
+        Err(e) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse { success: false, data: None,
+                error: Some(format!(
+                    "Image server not running. Start AUTOMATIC1111 on port 7860: {}",
+                    e
+                )) }),
+        )),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ModelInfo {
+    title: String,
+    model_name: String,
+    filename: String,
+}
+
+async fn images_models() -> Json<ApiResponse<Vec<ModelInfo>>> {
+    let client = reqwest::Client::new();
+    match client
+        .get(format!("{}/sdapi/v1/sd-models", A1111_URL))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            let body: Vec<serde_json::Value> = r.json().await.unwrap_or_default();
+            let models: Vec<ModelInfo> = body
+                .into_iter()
+                .map(|v| ModelInfo {
+                    title: v["title"].as_str().unwrap_or("").to_string(),
+                    model_name: v["model_name"].as_str().unwrap_or("").to_string(),
+                    filename: v["filename"].as_str().unwrap_or("").to_string(),
+                })
+                .collect();
+            Json(ApiResponse { success: true, data: Some(models), error: None })
+        }
+        _ => Json(ApiResponse {
+            success: false,
+            data: Some(vec![]),
+            error: Some("AUTOMATIC1111 not running on port 7860".to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoryQuery {
+    limit: Option<usize>,
+}
+
+async fn images_history(Query(q): Query<HistoryQuery>) -> Json<ApiResponse<Vec<serde_json::Value>>> {
+    let limit = q.limit.unwrap_or(50);
+    let history_path = format!("{}/.crane/image_history.jsonl", crane_home());
+    let entries: Vec<serde_json::Value> = std::fs::read_to_string(&history_path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take(limit)
+        .collect();
+    Json(ApiResponse { success: true, data: Some(entries), error: None })
+}
+
 // ===== Main =====
 
 #[tokio::main]
@@ -873,6 +1065,10 @@ async fn main() {
         // Repos
         .route("/api/repos/github/create", post(create_github_repo))
         .route("/api/repos/hf/create", post(create_hf_repo))
+        // Images — proxies to AUTOMATIC1111 (port 7860)
+        .route("/api/images/generate", post(images_generate))
+        .route("/api/images/models", get(images_models))
+        .route("/api/images/history", get(images_history))
         .with_state(state)
         .layer(tower_http::cors::CorsLayer::permissive());
 
@@ -889,8 +1085,9 @@ async fn main() {
     println!("   Miranda brain:  localhost:8003 (Qwen 3B abliterated, always-on)");
     println!("   Qwen Coder:     localhost:8001 (tool-use)");
     println!("   Qwen 14B burst: localhost:8000 (user-triggered only)");
-    println!("   Parakeet ASR:   localhost:8004 (Phase 2)");
-    println!("   TTS:            localhost:8005 (Phase 2)");
+    println!("   Parakeet ASR:   localhost:8004");
+    println!("   TTS:            localhost:8005");
+    println!("   A1111/Images:   localhost:7860 (start AUTOMATIC1111 separately)");
     println!("   Listening:      http://{}", addr);
 
     axum::serve(listener, app).await.unwrap();
