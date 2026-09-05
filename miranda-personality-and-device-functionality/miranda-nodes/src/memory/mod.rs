@@ -10,3 +10,6 @@ pub mod entity_extractor;
 pub mod event_writer;
 pub mod mood_classifier;
 pub mod neo4j_writer;
+pub mod obsidian_writer;
+pub mod prompt_injection;
+pub mod retriever;
