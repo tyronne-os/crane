@@ -110,24 +110,57 @@ install_via_build() {
   echo "  ✅ llama-server installed to $BIN_DIR/llama-server"
 }
 
-# Try pip install first (faster than build)
-if command -v pip3 &>/dev/null || command -v pip &>/dev/null; then
-  PIP=$(command -v pip3 || command -v pip)
-  echo "── Trying llama-cpp-python (pip) ────────────────────────────────────────"
-  if $HAS_CUDA; then
-    CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python[server] --quiet 2>&1 | tail -3 && \
-      echo "  ✅ Installed llama-cpp-python with CUDA" && \
-      echo "  llama-server is now available via: python -m llama_cpp.server" && \
-      cat >> "$VAULT/bin/llama-server-wrapper.sh" <<'WRAPPER'
+# Helper: install llama-cpp-python, create $BIN_DIR/llama-server wrapper
+install_llama_cpp_python() {
+  local extra_cmake="$1"
+  local label="$2"
+  echo "── Trying llama-cpp-python (pip) — $label ───────────────────────────────"
+
+  # Try --break-system-packages first (PEP 668 / Ubuntu 23.04+), fall back to --user
+  local pip_ok=false
+  for pip_flags in "--break-system-packages" "--user"; do
+    if CMAKE_ARGS="$extra_cmake" pip3 install "llama-cpp-python[server]" $pip_flags -q 2>&1 | tail -5; then
+      pip_ok=true
+      echo "  ✅ pip install succeeded ($pip_flags)"
+      break
+    fi
+  done
+
+  if ! $pip_ok; then
+    echo "  pip install failed — falling back to building llama.cpp from source"
+    install_via_build
+    return
+  fi
+
+  # Locate the installed binary (--user lands in ~/.local/bin)
+  local srv
+  srv="$(command -v llama-server 2>/dev/null \
+        || echo "$HOME/.local/bin/llama-server" \
+        || echo "")"
+
+  # Always create a wrapper so run.sh can find it via $VAULT/bin
+  mkdir -p "$BIN_DIR"
+  WRAPPER="$BIN_DIR/llama-server"
+  if [ -x "$srv" ] && [ "$srv" != "$WRAPPER" ]; then
+    ln -sf "$srv" "$WRAPPER" 2>/dev/null || cp "$srv" "$WRAPPER"
+    echo "  ✅ llama-server linked → $WRAPPER"
+  else
+    # Wrap python3 -m llama_cpp.server as the binary
+    cat > "$WRAPPER" <<'WRAPPER_SCRIPT'
 #!/bin/bash
 exec python3 -m llama_cpp.server "$@"
-WRAPPER
-      chmod +x "$VAULT/bin/llama-server-wrapper.sh" && \
-      ln -sf "$VAULT/bin/llama-server-wrapper.sh" "$BIN_DIR/llama-server" && \
-      echo "  Symlink created: $BIN_DIR/llama-server → wrapper" || install_via_build
+WRAPPER_SCRIPT
+    chmod +x "$WRAPPER"
+    echo "  ✅ wrapper created: $WRAPPER → python3 -m llama_cpp.server"
+  fi
+}
+
+# Try pip install first (faster than build)
+if command -v pip3 &>/dev/null; then
+  if $HAS_CUDA; then
+    install_llama_cpp_python "-DGGML_CUDA=on" "CUDA"
   else
-    pip install llama-cpp-python[server] --quiet 2>&1 | tail -3 && \
-      echo "  ✅ Installed llama-cpp-python (CPU)" || install_via_build
+    install_llama_cpp_python "" "CPU"
   fi
 else
   install_via_build
@@ -156,6 +189,25 @@ if [ -z "$MIRANDA_MODEL" ]; then
   echo "  (Q4_K_M = 1.8GB, best quality/size ratio for 3B)"
 else
   echo "  ✅ Miranda model: $(basename "$MIRANDA_MODEL") ($(du -sh "$MIRANDA_MODEL" | cut -f1))"
+fi
+
+# ── Step 6: Kokoro TTS (port 8005) ───────────────────────────────────────────
+echo ""
+echo "── Installing Kokoro TTS server ──────────────────────────────────────────"
+echo ""
+if command -v kokoro-serve &>/dev/null; then
+  echo "  ✅ kokoro-serve already installed"
+else
+  for pip_flags in "--break-system-packages" "--user"; do
+    if pip3 install kokoro-fastapi $pip_flags -q 2>&1 | tail -3; then
+      echo "  ✅ kokoro-fastapi installed ($pip_flags)"
+      break
+    fi
+  done
+  if ! command -v kokoro-serve &>/dev/null; then
+    echo "  ⚠  kokoro-serve not on PATH — TTS will use browser SpeechSynthesis fallback"
+    echo "     (add ~/.local/bin to PATH if installed via --user)"
+  fi
 fi
 
 echo ""

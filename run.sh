@@ -30,8 +30,32 @@ if [ -z "$TTS_MODEL" ]; then
   TTS_MODEL="$(find "$VAULT/models/kokoro-82m" -iname "*.gguf" -o -iname "*.safetensors" -o -iname "*.bin" 2>/dev/null | head -1)"
 fi
 
-# llama-server binary (from llama.cpp)
-LLAMA_SERVER="${LLAMA_SERVER:-$(command -v llama-server 2>/dev/null || echo "$VAULT/bin/llama-server")}"
+# llama-server binary (from llama.cpp or llama-cpp-python)
+# Resolution order:
+#   1. Explicit LLAMA_SERVER env var
+#   2. llama-server on PATH (llama.cpp native build or apt package)
+#   3. ~/.local/bin/llama-server (pip --user install)
+#   4. $VAULT/bin/llama-server (manual install to vault)
+#   5. python3 -m llama_cpp.server wrapper (llama-cpp-python pip package)
+_find_llama_server() {
+  command -v llama-server 2>/dev/null && return
+  [ -x "$HOME/.local/bin/llama-server" ] && echo "$HOME/.local/bin/llama-server" && return
+  [ -x "$VAULT/bin/llama-server" ] && echo "$VAULT/bin/llama-server" && return
+  if python3 -c "import llama_cpp" 2>/dev/null; then
+    # llama-cpp-python is installed; create a thin wrapper so run.sh can exec it
+    WRAPPER="$VAULT/bin/llama-server"
+    mkdir -p "$VAULT/bin"
+    cat > "$WRAPPER" <<'WRAPPER_SCRIPT'
+#!/bin/bash
+exec python3 -m llama_cpp.server "$@"
+WRAPPER_SCRIPT
+    chmod +x "$WRAPPER"
+    echo "$WRAPPER"
+    return
+  fi
+  echo ""
+}
+LLAMA_SERVER="${LLAMA_SERVER:-$(_find_llama_server)}"
 
 PIDS=()
 
@@ -115,32 +139,48 @@ start_parakeet() {
 
 # ── TTS server (port 8005) ────────────────────────────────────────────────────
 start_tts() {
-  if [ -z "$TTS_MODEL" ] || [ ! -f "$TTS_MODEL" ]; then
-    echo "⚠  No TTS model found in vault. TTS will use browser SpeechSynthesis fallback."
-    return 1
-  fi
-
-  # Try kokoro-fastapi (Python, OpenAI-compatible) if installed
+  # kokoro-fastapi works with .pth (PyTorch) models — preferred over piper/llama
+  # Resolution: kokoro-serve CLI → python3 -m kokoro_fastapi → ~/.local/bin/kokoro-serve → piper
+  local kokoro_bin=""
   if command -v kokoro-serve &>/dev/null; then
-    echo "Starting Kokoro TTS (kokoro-serve) on port $TTS_PORT..."
-    KOKORO_MODEL="$TTS_MODEL" kokoro-serve --port "$TTS_PORT" --host 127.0.0.1 \
+    kokoro_bin="$(command -v kokoro-serve)"
+  elif [ -x "$HOME/.local/bin/kokoro-serve" ]; then
+    kokoro_bin="$HOME/.local/bin/kokoro-serve"
+  elif python3 -c "import kokoro_fastapi" 2>/dev/null; then
+    # Create a wrapper
+    mkdir -p "$VAULT/bin"
+    cat > "$VAULT/bin/kokoro-serve" <<'KOK'
+#!/bin/bash
+exec python3 -m kokoro_fastapi "$@"
+KOK
+    chmod +x "$VAULT/bin/kokoro-serve"
+    kokoro_bin="$VAULT/bin/kokoro-serve"
+  fi
+
+  if [ -n "$kokoro_bin" ]; then
+    echo "Starting Kokoro TTS on port $TTS_PORT..."
+    # kokoro-fastapi accepts model path via env; .pth or safetensors both work
+    KOKORO_MODEL_PATH="${TTS_MODEL:-}" "$kokoro_bin" --host 127.0.0.1 --port "$TTS_PORT" \
       > "$CRANE_HOME/.crane/tts.log" 2>&1 &
     PIDS+=($!)
     echo "  TTS PID: ${PIDS[-1]}"
     return 0
   fi
 
-  # Try piper TTS if installed
+  # Try piper as fallback (only works with piper-native .onnx models, not .pth)
   if command -v piper &>/dev/null; then
-    echo "Starting Piper TTS on port $TTS_PORT..."
-    piper --model "$TTS_MODEL" --port "$TTS_PORT" \
-      > "$CRANE_HOME/.crane/tts.log" 2>&1 &
-    PIDS+=($!)
-    echo "  TTS PID: ${PIDS[-1]}"
-    return 0
+    if [ -n "$TTS_MODEL" ] && [ -f "$TTS_MODEL" ]; then
+      echo "Starting Piper TTS on port $TTS_PORT..."
+      piper --model "$TTS_MODEL" --port "$TTS_PORT" \
+        > "$CRANE_HOME/.crane/tts.log" 2>&1 &
+      PIDS+=($!)
+      echo "  TTS PID: ${PIDS[-1]}"
+      return 0
+    fi
   fi
 
-  echo "⚠  No TTS server binary (kokoro-serve, piper). Browser SpeechSynthesis fallback active."
+  echo "⚠  No TTS server (kokoro-serve, piper). Install: pip3 install kokoro-fastapi --break-system-packages"
+  echo "   Browser SpeechSynthesis fallback is active — voice still works."
   return 1
 }
 
